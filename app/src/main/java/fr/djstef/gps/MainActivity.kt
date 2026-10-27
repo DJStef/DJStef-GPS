@@ -75,7 +75,7 @@ import kotlin.math.roundToInt
 class MainActivity : Activity() {
 
     companion object {
-        const val VERSION = "0.3"
+        const val VERSION = "0.4"
         const val STYLE_URL = "https://tiles.openfreemap.org/styles/liberty"
 
         // Palette (même esprit que l'appli IPTV : fond bleu nuit, une couleur par section)
@@ -162,6 +162,12 @@ class MainActivity : Activity() {
     private var lastSpeedWarn = 0L
 
     private var menuView: View? = null
+    private lateinit var trips: TripStore
+    private var tripStart = 0L
+    private var tripDist = 0.0
+    private var tripMax = 0
+    private var tripLast: Location? = null
+    private val tripTrace = ArrayList<Pt>()
     private var menuPage: String? = null
 
     private val locMgr by lazy { getSystemService(Context.LOCATION_SERVICE) as LocationManager }
@@ -174,6 +180,7 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         prefs = AppPrefs(this)
+        trips = TripStore(this)
         MapLibre.getInstance(this)
         tts = TextToSpeech(this) {
             if (it == TextToSpeech.SUCCESS) {
@@ -556,6 +563,7 @@ class MainActivity : Activity() {
         applyCar()
         applyRadarVisibility()
         setupTraffic()
+        setupPoiLayers()
 
         m.addOnMapLongClickListener { ll ->
             setDestination(Pt(ll.latitude, ll.longitude), "Point choisi sur la carte")
@@ -720,7 +728,10 @@ class MainActivity : Activity() {
             speak("Attention, vitesse limitée à $lim")
         }
         checkRadars(loc, kmh)
-        if (navigating) navUpdate(loc)
+        if (navigating) {
+            recordTrip(loc, kmh)
+            navUpdate(loc)
+        }
     }
 
     // ---------- Limitations de vitesse ----------
@@ -994,6 +1005,11 @@ class MainActivity : Activity() {
     private fun startNavigation() {
         val r = route ?: return
         navigating = true
+        tripStart = System.currentTimeMillis()
+        tripDist = 0.0
+        tripMax = 0
+        tripLast = null
+        tripTrace.clear()
         follow = true
         stepIdx = 0
         farSaid = -1
@@ -1015,6 +1031,7 @@ class MainActivity : Activity() {
     private fun stopNavigation() {
         if (!navigating) return
         navigating = false
+        saveTrip()
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         map?.setPadding(0, 0, 0, 0)
         refreshPanel()
@@ -1223,6 +1240,254 @@ class MainActivity : Activity() {
         dlg.show()
     }
 
+    // ---------- Trajets, carburants, parkings ----------
+
+    private fun recordTrip(loc: Location, kmh: Int) {
+        if (kmh > tripMax) tripMax = kmh
+        val last = tripLast
+        val p = Pt(loc.latitude, loc.longitude)
+        if (last == null) {
+            tripLast = loc
+            tripTrace.add(p)
+            return
+        }
+        val d = Geo.dist(Pt(last.latitude, last.longitude), p)
+        if (d >= 25) {
+            tripDist += d
+            tripLast = loc
+            tripTrace.add(p)
+        }
+    }
+
+    private fun saveTrip() {
+        if (tripStart == 0L) return
+        val trace = if (tripTrace.size > 400) {
+            val step = tripTrace.size / 400.0
+            (0 until 400).map { tripTrace[(it * step).toInt()] }
+        } else tripTrace.toList()
+        trips.add(Trip(tripStart, System.currentTimeMillis(), tripDist, tripMax, destName, dest, trace))
+        tripStart = 0L
+        tripTrace.clear()
+    }
+
+    private fun setupPoiLayers() {
+        val st = style ?: return
+        try {
+            st.addImage("ic-fuel", PoiArt.bitmap("€", "#EF6C00"))
+            st.addImage("ic-parking", PoiArt.bitmap("P", "#1E88E5"))
+            st.addSource(GeoJsonSource("poi"))
+            st.addLayerBelow(
+                SymbolLayer("poi-layer", "poi").withProperties(
+                    PropertyFactory.iconImage(Expression.get("icon")),
+                    PropertyFactory.iconSize(0.75f),
+                    PropertyFactory.iconAllowOverlap(true),
+                    PropertyFactory.textField(Expression.get("label")),
+                    PropertyFactory.textSize(12f),
+                    PropertyFactory.textColor("#FFFFFF"),
+                    PropertyFactory.textHaloColor("#101828"),
+                    PropertyFactory.textHaloWidth(2f),
+                    PropertyFactory.textOffset(arrayOf(0f, 1.9f)),
+                    PropertyFactory.textOptional(true)
+                ),
+                "dest-layer"
+            )
+            st.addSource(GeoJsonSource("trip"))
+            st.addLayerBelow(
+                LineLayer("trip-layer", "trip").withProperties(
+                    PropertyFactory.lineColor("#8D6E63"),
+                    PropertyFactory.lineWidth(6f),
+                    PropertyFactory.lineCap(Property.LINE_CAP_ROUND),
+                    PropertyFactory.lineJoin(Property.LINE_JOIN_ROUND)
+                ),
+                "poi-layer"
+            )
+        } catch (e: Exception) {
+            toast("Couches annexes indisponibles : ${e.message}")
+        }
+    }
+
+    private fun showPois(items: List<Triple<Pt, String, String>>) {
+        val feats = items.map { (p, icon, label) ->
+            val f = point(p)
+            f.addStringProperty("icon", icon)
+            f.addStringProperty("label", label)
+            f
+        }
+        style?.getSourceAs<GeoJsonSource>("poi")?.setGeoJson(FeatureCollection.fromFeatures(feats))
+        if (items.isNotEmpty()) {
+            val b = org.maplibre.android.geometry.LatLngBounds.Builder()
+            for (i in items) b.include(org.maplibre.android.geometry.LatLng(i.first.lat, i.first.lon))
+            me?.let { b.include(org.maplibre.android.geometry.LatLng(it.latitude, it.longitude)) }
+            follow = false
+            try {
+                map?.animateCamera(CameraUpdateFactory.newLatLngBounds(b.build(), dp(70)), 600)
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    private fun km(m: Double) = if (m >= 1000) String.format(Locale.FRANCE, "%.1f km", m / 1000) else "${m.roundToInt()} m"
+
+    private fun fuelPage(content: LinearLayout) {
+        val c = card(content)
+        sectionTitle(c, "CARBURANT", "#FFB74D")
+        val cur = prefs.str("fuelType", "Gazole")
+        val hs = HorizontalScrollView(this)
+        val row = LinearLayout(this)
+        row.orientation = LinearLayout.HORIZONTAL
+        for (name in Fuel.TYPES.keys) {
+            val b = button(name, if (name == cur) "#EF6C00" else GREY) {
+                prefs.setStr("fuelType", name)
+                showMenu("fuel")
+            }
+            row.addView(b, LinearLayout.LayoutParams(-2, -2).also { it.rightMargin = dp(8) })
+        }
+        hs.addView(row)
+        c.addView(hs)
+
+        val list = LinearLayout(this)
+        list.orientation = LinearLayout.VERTICAL
+        val status = label("Recherche des stations…", 14f, false, "#9AA3B5")
+        list.addView(status)
+        content.addView(list)
+        val l = me
+        if (l == null) {
+            status.text = "Position GPS en attente…"
+            return
+        }
+        val key = Fuel.TYPES[cur] ?: "gazole"
+        scope.launch {
+            try {
+                val all = Fuel.around(Pt(l.latitude, l.longitude), 15)
+                val st = all.filter { it.prices.containsKey(key) }.sortedBy { it.prices[key] }.take(20)
+                list.removeAllViews()
+                if (st.isEmpty()) {
+                    list.addView(label("Aucune station avec du $cur dans 15 km.", 14f, false, "#9AA3B5"))
+                    return@launch
+                }
+                val cheapest = st.first().prices[key]
+                list.addView(button("Voir sur la carte", "#EF6C00") {
+                    showPois(st.map { Triple(it.pt, "ic-fuel", String.format(Locale.FRANCE, "%.3f", it.prices[key])) })
+                    closeMenu()
+                }, LinearLayout.LayoutParams(-1, -2).also { it.bottomMargin = dp(8) })
+                for (s in st) {
+                    val sc = card(list)
+                    val price = s.prices[key] ?: 0.0
+                    val top = LinearLayout(this@MainActivity)
+                    top.orientation = LinearLayout.HORIZONTAL
+                    top.gravity = Gravity.CENTER_VERTICAL
+                    top.addView(label(String.format(Locale.FRANCE, "%.3f €", price), 22f, true, if (price == cheapest) "#66BB6A" else "#FFFFFF"), LinearLayout.LayoutParams(0, -2, 1f))
+                    top.addView(label(km(s.dist), 14f, false, "#9AA3B5"))
+                    sc.addView(top)
+                    sc.addView(label("${s.address}, ${s.city}", 13f, false, "#C0C7D6"))
+                    val others = Fuel.TYPES.filter { it.value != key && s.prices.containsKey(it.value) }
+                        .map { "${it.key} ${String.format(Locale.FRANCE, "%.3f", s.prices[it.value])}" }
+                    if (others.isNotEmpty()) sc.addView(label(others.joinToString(" · "), 11f, false, "#8A93A6"))
+                    sc.setOnClickListener {
+                        closeMenu()
+                        goTo(Place("Station ${s.city}", s.pt))
+                    }
+                }
+            } catch (e: Exception) {
+                status.text = "Prix indisponibles : ${e.message}"
+            }
+        }
+    }
+
+    private fun parkingPage(content: LinearLayout) {
+        // Autour de la destination si elle existe, sinon autour de toi
+        val center = dest ?: me?.let { Pt(it.latitude, it.longitude) }
+        val list = LinearLayout(this)
+        list.orientation = LinearLayout.VERTICAL
+        val status = label("Recherche des parkings…", 14f, false, "#9AA3B5")
+        list.addView(status)
+        if (center == null) {
+            status.text = "Position GPS en attente…"
+            content.addView(list)
+            return
+        }
+        content.addView(label(if (dest != null) "Autour de : $destName" else "Autour de ta position", 12f, false, "#9AA3B5"))
+        content.addView(list)
+        scope.launch {
+            try {
+                val ps = Parkings.around(center).take(25)
+                list.removeAllViews()
+                if (ps.isEmpty()) {
+                    list.addView(label("Aucun parking trouvé à moins de 1,5 km.", 14f, false, "#9AA3B5"))
+                    return@launch
+                }
+                list.addView(button("Voir sur la carte", "#1E88E5") {
+                    showPois(ps.map { Triple(it.pt, "ic-parking", "") })
+                    closeMenu()
+                }, LinearLayout.LayoutParams(-1, -2).also { it.bottomMargin = dp(8) })
+                for (p in ps) {
+                    val pc = card(list)
+                    pc.addView(label(p.name, 16f, true))
+                    val info = listOfNotNull(p.fee, p.kind, p.capacity?.let { "$it places" }, km(p.dist))
+                    pc.addView(label(info.joinToString(" · "), 13f, false, if (p.fee == "Gratuit") "#66BB6A" else "#C0C7D6"))
+                    pc.setOnClickListener {
+                        closeMenu()
+                        goTo(Place(p.name, p.pt))
+                    }
+                }
+                list.addView(label("Données OpenStreetMap : tarifs et places libres non disponibles en temps réel.", 11f, false, "#8A93A6"))
+            } catch (e: Exception) {
+                status.text = "Parkings indisponibles : ${e.message}"
+            }
+        }
+    }
+
+    private fun tripsPage(content: LinearLayout) {
+        val all = trips.all()
+        if (all.isEmpty()) {
+            val c = card(content)
+            c.addView(label("Aucun trajet pour l'instant. Chaque navigation lancée est enregistrée ici.", 14f, false, "#9AA3B5"))
+            return
+        }
+        val total = all.sumOf { it.dist }
+        val c0 = card(content)
+        c0.addView(label("${all.size} trajets · ${km(total)}", 18f, true))
+        val fmt = java.text.SimpleDateFormat("EEE d MMM · HH:mm", Locale.FRANCE)
+        for (t in all) {
+            val c = card(content)
+            c.addView(label(if (t.destName.isBlank()) "Trajet" else t.destName, 16f, true))
+            c.addView(label(fmt.format(java.util.Date(t.start)), 12f, false, "#9AA3B5"))
+            val mins = ((t.end - t.start) / 60000.0).roundToInt()
+            val avg = if (t.end > t.start) (t.dist / 1000.0) / ((t.end - t.start) / 3600000.0) else 0.0
+            c.addView(label("${km(t.dist)} · $mins min · moy. ${avg.roundToInt()} km/h · max ${t.maxKmh} km/h", 13f, false, "#C0C7D6"))
+            val row = LinearLayout(this)
+            row.orientation = LinearLayout.HORIZONTAL
+            if (t.trace.size > 1) row.addView(button("Tracé", "#8D6E63") {
+                val coords = t.trace.map { Point.fromLngLat(it.lon, it.lat) }
+                style?.getSourceAs<GeoJsonSource>("trip")?.setGeoJson(Feature.fromGeometry(LineString.fromLngLats(coords)))
+                val b = org.maplibre.android.geometry.LatLngBounds.Builder()
+                for (p in t.trace) b.include(org.maplibre.android.geometry.LatLng(p.lat, p.lon))
+                follow = false
+                closeMenu()
+                try {
+                    map?.animateCamera(CameraUpdateFactory.newLatLngBounds(b.build(), dp(70)), 600)
+                } catch (_: Exception) {
+                }
+            }, LinearLayout.LayoutParams(0, -2, 1f).also { it.rightMargin = dp(6) })
+            t.dest?.let { d ->
+                row.addView(button("Refaire", GREEN) {
+                    closeMenu()
+                    goTo(Place(t.destName.ifBlank { "Destination" }, d))
+                }, LinearLayout.LayoutParams(0, -2, 1f).also { it.rightMargin = dp(6) })
+            }
+            row.addView(button("Suppr.", RED) {
+                trips.remove(t.start)
+                showMenu("trips")
+            }, LinearLayout.LayoutParams(0, -2, 1f))
+            c.addView(row, LinearLayout.LayoutParams(-1, -2).also { it.topMargin = dp(8) })
+        }
+        content.addView(button("Tout effacer", GREY) {
+            AlertDialog.Builder(this).setMessage("Effacer tout l'historique ?")
+                .setPositiveButton("Effacer") { _, _ -> trips.clear(); showMenu("trips") }
+                .setNegativeButton("Annuler", null).show()
+        })
+    }
+
     // ---------- Trafic temps réel (TomTom) ----------
 
     private fun setupTraffic() {
@@ -1315,6 +1580,9 @@ class MainActivity : Activity() {
         "route" -> BLUE
         "radar" -> RED
         "traffic" -> "#00897B"
+        "fuel" -> "#EF6C00"
+        "parking" -> "#1E88E5"
+        "trips" -> "#8D6E63"
         "guide" -> SLATE
         else -> ORANGE_L
     }
@@ -1325,6 +1593,9 @@ class MainActivity : Activity() {
         "route" -> "Itinéraire"
         "radar" -> "Radars"
         "traffic" -> "Trafic"
+        "fuel" -> "Carburants"
+        "parking" -> "Parkings"
+        "trips" -> "Mes trajets"
         "guide" -> "Guidage"
         "about" -> "À propos"
         else -> "DJSTEF GPS"
@@ -1371,6 +1642,9 @@ class MainActivity : Activity() {
             "route" -> routePage(content)
             "radar" -> radarPage(content)
             "traffic" -> trafficPage(content)
+            "fuel" -> fuelPage(content)
+            "parking" -> parkingPage(content)
+            "trips" -> tripsPage(content)
             "guide" -> guidePage(content)
             else -> aboutPage(content)
         }
@@ -1397,6 +1671,9 @@ class MainActivity : Activity() {
             arrayOf("vehicle", "🚗", "Véhicule", "Modèle 3D, couleur, taille", ORANGE),
             arrayOf("route", "🛣", "Itinéraire", "Péages, autoroutes, ferries", BLUE),
             arrayOf("radar", "📡", "Radars", "Alertes, éviter, signalements", RED),
+            arrayOf("fuel", "⛽", "Carburants", "Stations et prix", "#EF6C00"),
+            arrayOf("parking", "🅿", "Parkings", "Autour de toi", "#1E88E5"),
+            arrayOf("trips", "🕘", "Mes trajets", "Historique", "#8D6E63"),
             arrayOf("traffic", "🚦", "Trafic", "Temps réel (TomTom)", "#00897B"),
             arrayOf("guide", "🔊", "Guidage", "Voix, vitesse, vue 3D", SLATE),
             arrayOf("about", "ℹ", "À propos", "Version et sources", GREY)
@@ -1636,7 +1913,7 @@ class MainActivity : Activity() {
     private fun aboutPage(content: LinearLayout) {
         val c = card(content)
         c.addView(label("DJSTEF GPS · v$VERSION", 18f, true))
-        c.addView(label("Carte : OpenStreetMap et OpenFreeMap\nItinéraires : Valhalla / OSRM (OpenStreetMap)\nRadars fixes : data.gouv.fr (Licence Ouverte 2.0)\nTrafic : TomTom\nLimitations de vitesse : OpenStreetMap (Overpass)\nAdresses : Nominatim", 13f, false, "#C0C7D6"))
+        c.addView(label("Carte : OpenStreetMap et OpenFreeMap\nItinéraires : Valhalla / OSRM (OpenStreetMap)\nRadars fixes : data.gouv.fr (Licence Ouverte 2.0)\nTrafic : TomTom\nCarburants : data.economie.gouv.fr (Licence Ouverte)\nParkings : OpenStreetMap (ODbL)\nLimitations de vitesse : OpenStreetMap (Overpass)\nAdresses : Nominatim", 13f, false, "#C0C7D6"))
         val c2 = card(content)
         c2.addView(label("Les limitations de vitesse et les radars peuvent être incomplets ou périmés : respecte toujours la signalisation sur la route.", 13f, false, "#9AA3B5"))
     }
