@@ -227,6 +227,14 @@ object Geocoder {
             return res
         }
         val named = ArrayList<Place>()
+        // Résultats proches de toi (zone d'environ 40 km), toujours placés en tête, du plus proche au plus lointain
+        val zone = ArrayList<Place>()
+        if (near != null) {
+            val found = byName(what ?: q, near.lat, near.lon, 0.4, "") + (if (what != null) byName(q, near.lat, near.lon, 0.4, "") else emptyList())
+            for (p in found.sortedBy { Geo.dist(near, it.pt) }) if (zone.none { Geo.dist(it.pt, p.pt) < 120.0 }) zone.add(p)
+        }
+        diag += " · proches ${zone.size}" + (if (what != null) " · ville «$where»" else "")
+        fun finish(list: List<Place>): List<Place> = zone + list.filter { r -> zone.none { Geo.dist(it.pt, r.pt) < 120.0 } }
         if (what != null && where != null) {
             try {
                 val cities = JSONArray(Http.get(
@@ -263,10 +271,6 @@ object Geocoder {
             } catch (_: Exception) {
             }
         }
-        if (what == null && near != null) {
-            val around = byName(q, near.lat, near.lon, 0.4, "")
-            for (p in around.sortedBy { Geo.dist(near, it.pt) }) named.add(p)
-        }
         for (p in named) add(p)
 
         try {
@@ -296,20 +300,20 @@ object Geocoder {
                 add(Place(o.getString("display_name"), Pt(o.getString("lat").toDouble(), o.getString("lon").toDouble())))
             }
         } catch (_: Exception) {
-            if (out.isEmpty()) throw java.io.IOException("recherche indisponible")
+            if (out.isEmpty() && zone.isEmpty()) throw java.io.IOException("recherche indisponible")
         }
         // Les résultats qui mentionnent la ville demandée passent en premier
         if (where != null) {
             fun norm(t: String) = java.text.Normalizer.normalize(t.lowercase(), java.text.Normalizer.Form.NFD).replace(Regex("\\p{M}+"), "")
             val w = norm(where)
             val (hit, rest) = out.partition { norm(it.name).contains(w) }
-            return@withContext hit + rest
+            return@withContext finish(hit + rest)
         }
         if (where == null && near != null && ws.size >= 2 && ws[0].lowercase() in TYPES) {
             val (close, far) = out.partition { Geo.dist(near, it.pt) < 60000.0 }
-            return@withContext close.sortedBy { Geo.dist(near, it.pt) } + far
+            return@withContext finish(close.sortedBy { Geo.dist(near, it.pt) } + far)
         }
-        out
+        finish(out)
     }
 }
 
