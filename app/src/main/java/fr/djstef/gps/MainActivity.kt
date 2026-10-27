@@ -1282,7 +1282,9 @@ class MainActivity : Activity() {
         lastEtaFetch = System.currentTimeMillis()
         scope.launch {
             try {
-                val (sec, delay) = TomTomEta.eta(key, from, to)
+                val res = TomTomEta.eta(key, from, to) ?: return@launch
+                val sec = res.first
+                val delay = res.second
                 trafficEta = Pair(sec, System.currentTimeMillis())
                 trafficDelay = delay
                 if (preview && !navigating) {
