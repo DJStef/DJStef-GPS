@@ -47,13 +47,16 @@ jobs:
           gradle assembleRelease --no-daemon --stacktrace
 
       - name: Préparer l'APK
-        run: cp app/build/outputs/apk/release/app-release.apk DJStef-GPS.apk
+        run: |
+          VER=$(grep -oP 'versionName = "\K[^"]+' app/build.gradle.kts)
+          echo "VER=$VER" >> "$GITHUB_ENV"
+          cp app/build/outputs/apk/release/app-release.apk "DJStef-GPS-v$VER.apk"
 
       - name: Publier la release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "build-${{ github.run_number }}" DJStef-GPS.apk \
-            --title "DJStef GPS - build ${{ github.run_number }}" \
+          gh release create "build-${{ github.run_number }}" "DJStef-GPS-v$VER.apk" \
+            --title "DJStef GPS v$VER - build ${{ github.run_number }}" \
             --notes "APK signé, installable par-dessus la version précédente." \
             --latest
