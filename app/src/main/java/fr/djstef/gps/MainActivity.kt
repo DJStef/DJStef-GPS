@@ -76,7 +76,7 @@ import kotlin.math.roundToInt
 class MainActivity : Activity() {
 
     companion object {
-        const val VERSION = "0.26"
+        const val VERSION = "0.27"
         const val STYLE_URL = "https://tiles.openfreemap.org/styles/liberty"
         const val STYLE_DARK = "https://tiles.openfreemap.org/styles/dark"
 
@@ -797,8 +797,16 @@ class MainActivity : Activity() {
             st.addSource(GeoJsonSource(id, FeatureCollection.fromFeatures(emptyList<Feature>())))
         }
         st.addLayer(
+            LineLayer("route-casing", "route").withProperties(
+                PropertyFactory.lineColor("#FFFFFF"),
+                PropertyFactory.lineWidth(12f),
+                PropertyFactory.lineCap(Property.LINE_CAP_ROUND),
+                PropertyFactory.lineJoin(Property.LINE_JOIN_ROUND)
+            )
+        )
+        st.addLayer(
             LineLayer("route-layer", "route").withProperties(
-                PropertyFactory.lineColor(ORANGE_L),
+                PropertyFactory.lineColor("#1A4FB5"),
                 PropertyFactory.lineWidth(8f),
                 PropertyFactory.lineCap(Property.LINE_CAP_ROUND),
                 PropertyFactory.lineJoin(Property.LINE_JOIN_ROUND)
