@@ -67,6 +67,10 @@ import androidx.car.app.navigation.model.Step as CarStep
  */
 class NavScreen(ctx: CarContext) : Screen(ctx) {
     private val prefs = AppPrefs(ctx)
+
+    init {
+        CarSprites.assets = ctx.assets
+    }
     private var vd: VirtualDisplay? = null
     private var pres: Presentation? = null
     private var mapView: MapView? = null

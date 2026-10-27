@@ -75,7 +75,7 @@ import kotlin.math.roundToInt
 class MainActivity : Activity() {
 
     companion object {
-        const val VERSION = "0.6"
+        const val VERSION = "0.7"
         const val STYLE_URL = "https://tiles.openfreemap.org/styles/liberty"
 
         // Palette (même esprit que l'appli IPTV : fond bleu nuit, une couleur par section)
@@ -182,6 +182,7 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
         prefs = AppPrefs(this)
         trips = TripStore(this)
+        CarSprites.assets = assets
         NavBridge.go = { pl ->
             runOnUiThread {
                 autoStart = true
@@ -1985,7 +1986,7 @@ class MainActivity : Activity() {
     private fun aboutPage(content: LinearLayout) {
         val c = card(content)
         c.addView(label("DJSTEF GPS · v$VERSION", 18f, true))
-        c.addView(label("Carte : OpenStreetMap et OpenFreeMap\nItinéraires : Valhalla / OSRM (OpenStreetMap)\nRadars fixes : data.gouv.fr (Licence Ouverte 2.0)\nTrafic : TomTom\nCarburants : data.economie.gouv.fr (Licence Ouverte)\nParkings : OpenStreetMap (ODbL)\nLimitations de vitesse : OpenStreetMap (Overpass)\nAdresses : Nominatim", 13f, false, "#C0C7D6"))
+        c.addView(label("Carte : OpenStreetMap et OpenFreeMap\nItinéraires : Valhalla / OSRM (OpenStreetMap)\nRadars fixes : data.gouv.fr (Licence Ouverte 2.0)\nTrafic : TomTom\nCarburants : data.economie.gouv.fr (Licence Ouverte)\nParkings : OpenStreetMap (ODbL)\nVoiture « Concept 3D » : Concept Car © Eric Chadwick / Khronos, CC BY 4.0, base Unity Fan (CC0)\nLimitations de vitesse : OpenStreetMap (Overpass)\nAdresses : Nominatim", 13f, false, "#C0C7D6"))
         val c2 = card(content)
         c2.addView(label("Les limitations de vitesse et les radars peuvent être incomplets ou périmés : respecte toujours la signalisation sur la route.", 13f, false, "#9AA3B5"))
     }

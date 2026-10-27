@@ -19,12 +19,48 @@ import android.graphics.Typeface
  * Les dessins sont faits à l'échelle x2 pour rester nets quand on les agrandit.
  */
 object CarSprites {
-    val NAMES = listOf("Citadine", "Berline", "SUV", "Sportive", "Utilitaire", "Mégane IV GT", "Hilux hardtop")
+    val NAMES = listOf("Citadine", "Berline", "SUV", "Sportive", "Utilitaire", "Mégane IV GT", "Hilux hardtop", "Concept 3D réel")
     val COLORS = listOf(
         "#E53935", "#FF9F1C", "#FDD835", "#43A047", "#1E88E5", "#F5F5F5", "#212121", "#B0BEC5"
     )
 
     private const val SCALE = 2f
+
+    /** Accès aux images pré-rendues à partir de vrais modèles 3D (dossier assets/cars). */
+    var assets: android.content.res.AssetManager? = null
+    private val cache = HashMap<String, Bitmap>()
+
+    /** Modèles 3D réels (index >= 7) : image pré-rendue de la couleur de palette la plus proche. */
+    private fun real(view: String, color: Int): Bitmap? {
+        val am = assets ?: return null
+        var best = 0
+        var bd = Int.MAX_VALUE
+        for ((i, hex) in COLORS.withIndex()) {
+            val c = Color.parseColor(hex)
+            val dr = Color.red(c) - Color.red(color)
+            val dg = Color.green(c) - Color.green(color)
+            val db = Color.blue(c) - Color.blue(color)
+            val d = dr * dr + dg * dg + db * db
+            if (d < bd) {
+                bd = d
+                best = i
+            }
+        }
+        val key = "$view$best"
+        cache[key]?.let { return it }
+        return try {
+            am.open("cars/concept_${view}_$best.png").use { st ->
+                val o = android.graphics.BitmapFactory.Options()
+                o.inScaled = false
+                val b = android.graphics.BitmapFactory.decodeStream(st, null, o)
+                b?.density = 960
+                if (b != null) cache[key] = b
+                b
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
 
     private fun shade(color: Int, f: Float): Int {
         val hsv = FloatArray(3)
@@ -80,6 +116,7 @@ object CarSprites {
     //  Vue de derrière (3D)
     // =====================================================================
     fun drawRear(model: Int, color: Int): Bitmap {
+        if (model == 7) real("rear", color)?.let { return it }
         if (model == 5) return drawRearMegane(color)
         if (model == 6) return drawRearHilux(color)
         val w = 240
@@ -267,6 +304,7 @@ object CarSprites {
     //  Vue du dessus (2D)
     // =====================================================================
     fun draw(model: Int, color: Int): Bitmap {
+        if (model == 7) real("top", color)?.let { return it }
         val w = 180
         val h = 320
         val bmp = Bitmap.createBitmap((w * SCALE).toInt(), (h * SCALE).toInt(), Bitmap.Config.ARGB_8888)
