@@ -76,7 +76,7 @@ import kotlin.math.roundToInt
 class MainActivity : Activity() {
 
     companion object {
-        const val VERSION = "0.20"
+        const val VERSION = "0.21"
         const val STYLE_URL = "https://tiles.openfreemap.org/styles/liberty"
         const val STYLE_DARK = "https://tiles.openfreemap.org/styles/dark"
 
@@ -149,6 +149,11 @@ class MainActivity : Activity() {
     private var lastBearing = 0f
     private var follow = true
     private var zoomBoost = 0.0
+    private lateinit var infoRow: LinearLayout
+    private lateinit var navBand: LinearLayout
+    private lateinit var navEta: TextView
+    private lateinit var navSub: TextView
+    private lateinit var navDestV: TextView
     private val vias = ArrayList<Place>()
     private var pendingVia = false
     private var alts: List<Route> = emptyList()
@@ -424,16 +429,17 @@ class MainActivity : Activity() {
         navBanner.orientation = LinearLayout.HORIZONTAL
         navBanner.gravity = Gravity.CENTER_VERTICAL
         navBanner.background = gradBg(GREEN, 18)
-        navBanner.setPadding(dp(16), dp(12), dp(16), dp(12))
+        navBanner.setPadding(dp(12), dp(8), dp(12), dp(8))
         navBanner.visibility = View.GONE
-        navArrow = label("↑", 44f, true)
+        navArrow = label("↑", 36f, true)
         navArrow.gravity = Gravity.CENTER
-        navBanner.addView(navArrow, LinearLayout.LayoutParams(dp(64), -2))
+        navBanner.addView(navArrow, LinearLayout.LayoutParams(dp(52), -2))
         val navCol = LinearLayout(this)
         navCol.orientation = LinearLayout.VERTICAL
-        navDist = label("", 28f, true)
-        navStreet = label("", 16f, false, "#E8F5E9")
-        navStreet.maxLines = 3
+        navDist = label("", 24f, true)
+        navStreet = label("", 14f, false, "#E8F5E9")
+        navStreet.maxLines = 2
+        navStreet.ellipsize = android.text.TextUtils.TruncateAt.END
         navCol.addView(navDist)
         navCol.addView(navStreet)
         navBanner.addView(navCol, LinearLayout.LayoutParams(0, -2, 1f).also { it.leftMargin = dp(8) })
@@ -443,33 +449,33 @@ class MainActivity : Activity() {
         radarBox.orientation = LinearLayout.HORIZONTAL
         radarBox.gravity = Gravity.CENTER_VERTICAL
         radarBox.background = gradBg(RED, 18)
-        radarBox.setPadding(dp(10), dp(8), dp(14), dp(8))
+        radarBox.setPadding(dp(8), dp(5), dp(12), dp(5))
         radarBox.visibility = View.GONE
         radarIcon = ImageView(this)
-        radarBox.addView(radarIcon, LinearLayout.LayoutParams(dp(56), dp(56)))
-        radarText = label("", 18f, true)
+        radarBox.addView(radarIcon, LinearLayout.LayoutParams(dp(40), dp(40)))
+        radarText = label("", 16f, true)
         radarBox.addView(radarText, LinearLayout.LayoutParams(0, -2, 1f).also { it.leftMargin = dp(10) })
-        topBox.addView(radarBox, LinearLayout.LayoutParams(-1, -2).also { it.topMargin = dp(8) })
+        topBox.addView(radarBox, LinearLayout.LayoutParams(-1, -2).also { it.topMargin = dp(6) })
 
         root.addView(topBox, FrameLayout.LayoutParams(-1, -2, Gravity.TOP))
 
         // --- Droite : boutons ---
         val side = LinearLayout(this)
         side.orientation = LinearLayout.VERTICAL
-        val recBtn = circleBtn("◎", 52) { recenter() }
-        val repBtn = circleBtn("⚠", 52) { reportDialog() }
-        muteBtn = circleBtn("🔊", 52) { toggleMute() }
-        viewBtn = circleBtn("3D", 52) { toggleView() }
-        trafficBtn = circleBtn("🚦", 52) { toggleTraffic() }
-        val zin = circleBtn("＋", 52) { adjustZoom(0.5) }
+        val recBtn = circleBtn("◎", 44) { recenter() }
+        val repBtn = circleBtn("⚠", 44) { reportDialog() }
+        muteBtn = circleBtn("🔊", 44) { toggleMute() }
+        viewBtn = circleBtn("3D", 44) { toggleView() }
+        trafficBtn = circleBtn("🚦", 44) { toggleTraffic() }
+        val zin = circleBtn("＋", 44) { adjustZoom(0.5) }
         zin.setOnLongClickListener { prefs.setFloat("navZoom", 0f); toast("Zoom automatique selon la vitesse"); me?.let { moveCamera(it) }; true }
-        val zout = circleBtn("－", 52) { adjustZoom(-0.5) }
+        val zout = circleBtn("－", 44) { adjustZoom(-0.5) }
         zin.visibility = View.GONE
         zout.visibility = View.GONE
         zoomInBtn = zin
         zoomOutBtn = zout
         for (b in listOf(recBtn, repBtn, trafficBtn, zin, zout, muteBtn, viewBtn)) {
-            (b.layoutParams as LinearLayout.LayoutParams).topMargin = dp(10)
+            (b.layoutParams as LinearLayout.LayoutParams).topMargin = dp(8)
             side.addView(b)
         }
         muteBtn.visibility = View.GONE
@@ -483,7 +489,7 @@ class MainActivity : Activity() {
         bottomBox = LinearLayout(this)
         bottomBox.orientation = LinearLayout.VERTICAL
 
-        val infoRow = LinearLayout(this)
+        infoRow = LinearLayout(this)
         infoRow.orientation = LinearLayout.HORIZONTAL
         infoRow.gravity = Gravity.BOTTOM
         speedView = SpeedBubble(this)
@@ -547,6 +553,26 @@ class MainActivity : Activity() {
         android.text.util.Linkify.addLinks(creditView, android.text.util.Linkify.WEB_URLS)
         creditView.setLinkTextColor(Color.parseColor("#90CAF9"))
         creditView.visibility = if (prefs.str("lufopKey", "").isNotBlank()) View.VISIBLE else View.GONE
+        navBand = LinearLayout(this)
+        navBand.orientation = LinearLayout.HORIZONTAL
+        navBand.gravity = Gravity.CENTER_VERTICAL
+        navBand.setBackgroundColor(Color.parseColor("#FF101828"))
+        navBand.visibility = View.GONE
+        val navCol = LinearLayout(this)
+        navCol.orientation = LinearLayout.VERTICAL
+        navEta = label("", 20f, true)
+        navSub = label("", 13f, false, "#C0C7D6")
+        navDestV = label("", 12f, false, "#9AA3B5")
+        navDestV.maxLines = 1
+        navDestV.ellipsize = android.text.TextUtils.TruncateAt.END
+        navCol.addView(navEta)
+        navCol.addView(navSub)
+        navCol.addView(navDestV)
+        navBand.addView(navCol, LinearLayout.LayoutParams(0, -2, 1f).also { it.leftMargin = dp(10); it.rightMargin = dp(8) })
+        val navStop = button("Arrêter", RED) { stopNavigation() }
+        navStop.textSize = 15f
+        navBand.addView(navStop, LinearLayout.LayoutParams(dp(104), dp(52)))
+        bottomBox.addView(navBand, LinearLayout.LayoutParams(-1, -2))
         bottomBox.addView(creditView, LinearLayout.LayoutParams(-1, -2).also { it.topMargin = dp(4) })
 
         val bLp = FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM)
@@ -563,8 +589,7 @@ class MainActivity : Activity() {
             topInset = ins.systemWindowInsetTop
             bottomInset = ins.systemWindowInsetBottom
             topBox.setPadding(dp(10), topInset + dp(10), dp(10), 0)
-            (bottomBox.layoutParams as FrameLayout.LayoutParams).bottomMargin = bottomInset + dp(10)
-            bottomBox.requestLayout()
+            applyBottomMargins()
             ins
         }
 
@@ -572,9 +597,39 @@ class MainActivity : Activity() {
         updateModeButtons()
     }
 
+    /** En guidage, le bandeau d'infos occupe toute la largeur en bas et la carte s'arrête au-dessus. */
+    private fun applyBottomMargins() {
+        if (!::bottomBox.isInitialized || !::navBand.isInitialized) return
+        val lp = bottomBox.layoutParams as FrameLayout.LayoutParams
+        if (navigating) {
+            lp.setMargins(0, 0, 0, 0)
+            navBand.setPadding(dp(12), dp(8), dp(12), dp(8))
+            creditView.setBackgroundColor(Color.parseColor("#FF101828"))
+            creditView.setPadding(dp(12), 0, dp(12), bottomInset + dp(4))
+            (creditView.layoutParams as LinearLayout.LayoutParams).topMargin = 0
+        } else {
+            lp.setMargins(dp(10), 0, dp(10), bottomInset + dp(10))
+            creditView.setBackgroundColor(Color.TRANSPARENT)
+            creditView.setPadding(0, 0, 0, 0)
+            (creditView.layoutParams as LinearLayout.LayoutParams).topMargin = dp(4)
+        }
+        bottomBox.layoutParams = lp
+        applyMapBottom()
+    }
+
+    private fun applyMapBottom() {
+        val lp = mapView.layoutParams as FrameLayout.LayoutParams
+        val want = if (navigating) bottomH else 0
+        if (lp.bottomMargin != want) {
+            lp.bottomMargin = want
+            mapView.layoutParams = lp
+        }
+    }
+
     private fun applyMapMargins() {
         val ui = map?.uiSettings ?: return
-        val b = bottomH + bottomInset + dp(16)
+        applyMapBottom()
+        val b = if (navigating) dp(8) else bottomH + bottomInset + dp(16)
         ui.logoGravity = Gravity.BOTTOM or Gravity.END
         ui.attributionGravity = Gravity.BOTTOM or Gravity.END
         ui.setLogoMargins(0, 0, dp(10), b)
@@ -590,7 +645,23 @@ class MainActivity : Activity() {
 
     /** Affiche ou masque les éléments selon l'état : sans route, aperçu, guidage. */
     private fun refreshPanel() {
-        panel.visibility = if (route != null) View.VISIBLE else View.GONE
+        panel.visibility = if (route != null && !navigating) View.VISIBLE else View.GONE
+        navBand.visibility = if (navigating) View.VISIBLE else View.GONE
+        infoRow.visibility = if (navigating) View.GONE else View.VISIBLE
+        val host = if (navigating) navBand else infoRow
+        if (speedView.parent !== host) {
+            (speedView.parent as? android.view.ViewGroup)?.removeView(speedView)
+            (limitView.parent as? android.view.ViewGroup)?.removeView(limitView)
+            if (navigating) {
+                navBand.addView(speedView, 0, LinearLayout.LayoutParams(dp(74), dp(74)))
+                navBand.addView(limitView, 1, LinearLayout.LayoutParams(dp(66), dp(66)).also { it.leftMargin = dp(8) })
+            } else {
+                infoRow.addView(speedView, 0, LinearLayout.LayoutParams(dp(92), dp(92)))
+                infoRow.addView(limitView, 1, LinearLayout.LayoutParams(dp(84), dp(84)).also { it.leftMargin = dp(8) })
+            }
+        }
+        navDestV.text = destName.substringBefore(",")
+        applyBottomMargins()
         modeRow.visibility = if (navigating) View.GONE else View.VISIBLE
         cancelBtn.visibility = if (navigating) View.GONE else View.VISIBLE
         viaBtn.visibility = if (navigating) View.GONE else View.VISIBLE
@@ -624,6 +695,8 @@ class MainActivity : Activity() {
 
     private fun onStyleReady(m: MapLibreMap, st: Style) {
         style = st
+        // Pas de fondu des symboles (la voiture clignotait à chaque mise à jour de position)
+        st.transition = org.maplibre.android.style.layers.TransitionOptions(0, 0, false)
         for (id in listOf("radars", "reports", "route", "dest", "me")) {
             st.addSource(GeoJsonSource(id, FeatureCollection.fromFeatures(emptyList<Feature>())))
         }
@@ -1446,6 +1519,8 @@ class MainActivity : Activity() {
         val shown = if (te != null && nowMs - te.second < 360000) te.first else remTime
         etaView.text = "Arrivée ${eta(shown)}"
         subView.text = summary(shown, remain) + (if (te != null && trafficDelay >= 120) " · trafic +${(trafficDelay / 60).roundToInt()} min" else "")
+        navEta.text = etaView.text
+        navSub.text = subView.text
         // Zoom d'approche : rond-point (dès 300 m) et virages (dès 150 m), puis retour au zoom choisi
         val roundabout = next.kind == 26 || next.kind == 27
         val turn = next.kind in setOf(15, 19, 21, 24, 3, 16, 14, 10, 18, 20, 23, 2, 9, 11, 12, 13)

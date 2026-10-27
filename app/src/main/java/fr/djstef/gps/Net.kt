@@ -543,8 +543,39 @@ object SpeedLimits {
     private const val ROADS = "motorway|trunk|primary|secondary|tertiary|unclassified|residential|living_street|" +
         "motorway_link|trunk_link|primary_link|secondary_link|tertiary_link|service"
 
+    /** Limite via Valhalla /locate (OpenStreetMap), avec le sens de circulation selon le cap. */
+    private fun valhallaAt(p: Pt, heading: Double?): Int? {
+        val body = JSONObject()
+            .put("locations", JSONArray().put(JSONObject().put("lat", p.lat).put("lon", p.lon)))
+            .put("costing", "auto").put("verbose", true)
+        val arr = JSONArray(Http.post("https://valhalla1.openstreetmap.de/locate", body.toString(), 8000))
+        val edges = arr.optJSONObject(0)?.optJSONArray("edges") ?: return null
+        var best: JSONObject? = null
+        var bestScore = Double.MAX_VALUE
+        for (i in 0 until edges.length()) {
+            val e = edges.getJSONObject(i)
+            var score = e.optDouble("distance", 50.0)
+            if (heading != null && e.has("heading")) score += Geo.angleDiff(e.getDouble("heading"), heading) / 4.0
+            if (score < bestScore) { bestScore = score; best = e }
+        }
+        val e = best ?: return null
+        val sl = e.optJSONObject("edge_info")?.optInt("speed_limit", 0) ?: 0
+        if (sl in 5..150) return sl
+        return when (e.optJSONObject("edge")?.optJSONObject("classification")?.optString("classification")) {
+            "motorway" -> 130
+            "residential" -> 50
+            "service_other" -> null
+            else -> null
+        }
+    }
+
     /** Limite en km/h de la route sous la position donnée, ou null si inconnue. */
     suspend fun at(p: Pt, heading: Double?): Int? = withContext(Dispatchers.IO) {
+        try {
+            val v = valhallaAt(p, heading)
+            if (v != null) return@withContext v
+        } catch (_: Exception) {
+        }
         val q = "[out:json][timeout:6];way(around:25,${p.lat},${p.lon})[highway~\"^($ROADS)\$\"];out tags geom;"
         var txt: String? = null
         for (ep in ENDPOINTS) {
