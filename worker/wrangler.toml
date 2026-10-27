@@ -1,0 +1,8 @@
+name = "djstef-gps-reports"
+main = "index.js"
+compatibility_date = "2024-09-01"
+
+# Créer le KV puis coller son id : npx wrangler kv namespace create REPORTS
+[[kv_namespaces]]
+binding = "REPORTS"
+id = "REMPLACER_PAR_ID_KV"

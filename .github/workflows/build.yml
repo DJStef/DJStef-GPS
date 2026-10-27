@@ -1,0 +1,59 @@
+name: Build APK
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.9
+
+      - name: Restaurer la clé de signature
+        uses: actions/cache@v4
+        with:
+          path: ~/djstef-keystore
+          key: djstef-keystore-v1
+
+      - name: Créer la clé de signature si absente
+        run: |
+          if [ ! -f "$HOME/djstef-keystore/djstef.jks" ]; then
+            mkdir -p "$HOME/djstef-keystore"
+            PASS=$(openssl rand -hex 16)
+            keytool -genkeypair -keystore "$HOME/djstef-keystore/djstef.jks" -alias djstef \
+              -keyalg RSA -keysize 2048 -validity 36500 \
+              -storepass "$PASS" -keypass "$PASS" -dname "CN=DJStef GPS, O=DJStef, C=FR"
+            echo "$PASS" > "$HOME/djstef-keystore/pass.txt"
+          fi
+
+      - name: Compiler l'APK
+        run: |
+          export KS_PATH="$HOME/djstef-keystore/djstef.jks"
+          export KS_PASS="$(cat "$HOME/djstef-keystore/pass.txt")"
+          gradle assembleRelease --no-daemon --stacktrace
+
+      - name: Préparer l'APK
+        run: cp app/build/outputs/apk/release/app-release.apk DJStef-GPS.apk
+
+      - name: Publier la release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "build-${{ github.run_number }}" DJStef-GPS.apk \
+            --title "DJStef GPS - build ${{ github.run_number }}" \
+            --notes "APK signé, installable par-dessus la version précédente." \
+            --latest
