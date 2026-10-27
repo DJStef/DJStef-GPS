@@ -75,7 +75,7 @@ import kotlin.math.roundToInt
 class MainActivity : Activity() {
 
     companion object {
-        const val VERSION = "0.4"
+        const val VERSION = "0.5"
         const val STYLE_URL = "https://tiles.openfreemap.org/styles/liberty"
 
         // Palette (même esprit que l'appli IPTV : fond bleu nuit, une couleur par section)
@@ -1546,6 +1546,38 @@ class MainActivity : Activity() {
             setupTraffic()
             toast("Clé enregistrée")
         }, LinearLayout.LayoutParams(-1, -2).also { it.topMargin = dp(8) })
+        val result = label("", 13f, true)
+        c2.addView(button("Tester la clé", BLUE) {
+            val k = et.text.toString().trim()
+            if (k.isBlank()) {
+                result.text = "Colle d'abord ta clé."
+                result.setTextColor(Color.parseColor("#EF9A9A"))
+                return@button
+            }
+            result.text = "Test en cours…"
+            result.setTextColor(Color.WHITE)
+            scope.launch {
+                val msg = withContext(Dispatchers.IO) {
+                    try {
+                        Http.get("https://api.tomtom.com/traffic/map/4/tile/flow/relative0/10/530/375.png?key=$k")
+                        "OK"
+                    } catch (e: Exception) {
+                        e.message ?: "erreur"
+                    }
+                }
+                if (msg == "OK") {
+                    result.text = "✔ Clé valide : le trafic est actif."
+                    result.setTextColor(Color.parseColor("#81C784"))
+                } else {
+                    result.text = when {
+                        msg.contains("403") || msg.contains("401") -> "✘ Clé refusée par TomTom ($msg). Vérifie qu'elle est copiée en entier."
+                        else -> "✘ Test impossible : $msg"
+                    }
+                    result.setTextColor(Color.parseColor("#EF9A9A"))
+                }
+            }
+        }, LinearLayout.LayoutParams(-1, -2).also { it.topMargin = dp(8) })
+        c2.addView(result)
     }
 
     private fun startPolling() {
