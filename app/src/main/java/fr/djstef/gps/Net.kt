@@ -175,30 +175,41 @@ object Geocoder {
         val what = if (implicit) ws.dropLast(1).joinToString(" ") else m?.groupValues?.get(1)?.trim()
         val where = if (implicit) ws.last() else m?.groupValues?.get(2)?.trim()
 
-        fun nameRx(t: String): String = t.lowercase().split(Regex("[\\s'’-]+"))
-            .filter { it.length > 1 && it !in STOP && it !in TYPES }
-            .joinToString(".*") { fold(it) }
-        fun byName(rx: String, lat: Double, lon: Double, radius: Int, town: String): List<Place> {
-            if (rx.isBlank()) return emptyList()
+        fun nameWords(t: String): String = t.lowercase().split(Regex("[\\s'’-]+"))
+            .filter { it.length > 1 && it !in STOP && it !in TYPES }.joinToString(" ")
+        val osmTag = mapOf(
+            "camping" to "tourism:camp_site", "campings" to "tourism:camp_site", "restaurant" to "amenity:restaurant",
+            "hotel" to "tourism:hotel", "hôtel" to "tourism:hotel", "boulangerie" to "shop:bakery",
+            "pharmacie" to "amenity:pharmacy", "bar" to "amenity:bar", "cafe" to "amenity:cafe", "café" to "amenity:cafe",
+            "gite" to "tourism:guest_house", "gîte" to "tourism:guest_house", "mairie" to "amenity:townhall"
+        )
+        /** Photon limité à une zone (bbox) : trouve les lieux de ce nom près de (lat, lon). */
+        fun byName(full: String, lat: Double, lon: Double, dLat: Double, town: String): List<Place> {
+            val words = nameWords(full)
+            if (words.isBlank()) return emptyList()
+            val dLon = dLat / Math.cos(Math.toRadians(lat)).coerceAtLeast(0.2)
+            val bbox = "${lon - dLon},${lat - dLat},${lon + dLon},${lat + dLat}"
+            val tag = osmTag[full.trim().split(Regex("\\s+")).first().lowercase()]
             val res = ArrayList<Place>()
-            try {
-                val oq = "[out:json][timeout:15];nwr[\"name\"~\"$rx\",i](around:$radius,$lat,$lon);out center tags 12;"
-                var txt: String? = null
-                for (e in listOf("https://overpass-api.de/api/interpreter", "https://overpass.kumi.systems/api/interpreter")) {
-                    try { txt = Http.post(e, "data=" + URLEncoder.encode(oq, "UTF-8"), 20000); break } catch (_: Exception) {}
+            for (t in listOfNotNull(tag, null)) {
+                try {
+                    var url = "https://photon.komoot.io/api/?limit=12&lang=fr&bbox=$bbox&q=" + URLEncoder.encode(words, "UTF-8")
+                    if (t != null) url += "&osm_tag=$t"
+                    val feats = JSONObject(Http.get(url)).optJSONArray("features") ?: JSONArray()
+                    for (k in 0 until feats.length()) {
+                        val f = feats.getJSONObject(k)
+                        val pr = f.optJSONObject("properties") ?: continue
+                        if (t == null && pr.optString("osm_key") in setOf("highway", "landuse", "place")) continue
+                        val co = f.getJSONObject("geometry").getJSONArray("coordinates")
+                        val parts = ArrayList<String>()
+                        for (key in listOf("name", "street", "city", "postcode")) {
+                            val v = pr.optString(key, "")
+                            if (v.isNotBlank() && v !in parts) parts.add(v)
+                        }
+                        if (parts.isNotEmpty()) res.add(Place(parts.joinToString(", "), Pt(co.getDouble(1), co.getDouble(0))))
+                    }
+                } catch (_: Exception) {
                 }
-                val els = JSONObject(txt ?: "{\"elements\":[]}").getJSONArray("elements")
-                for (k in 0 until els.length()) {
-                    val e = els.getJSONObject(k)
-                    val tags = e.optJSONObject("tags") ?: continue
-                    val ce = e.optJSONObject("center")
-                    val la = if (e.has("lat")) e.getDouble("lat") else ce?.optDouble("lat", Double.NaN) ?: Double.NaN
-                    val lo = if (e.has("lon")) e.getDouble("lon") else ce?.optDouble("lon", Double.NaN) ?: Double.NaN
-                    if (la.isNaN() || lo.isNaN()) continue
-                    val city = tags.optString("addr:city", "").ifBlank { town }
-                    res.add(Place(tags.optString("name") + (if (city.isNotBlank()) ", $city" else ""), Pt(la, lo)))
-                }
-            } catch (_: Exception) {
             }
             return res
         }
@@ -208,8 +219,6 @@ object Geocoder {
                 val cities = JSONArray(Http.get(
                     "https://nominatim.openstreetmap.org/search?format=jsonv2&limit=4&countrycodes=fr&accept-language=fr&q=" +
                         URLEncoder.encode(where, "UTF-8")))
-                val words = what.lowercase().split(Regex("[\\s'’-]+")).filter { it.length > 1 && it !in STOP && it !in TYPES }
-                val rx = words.joinToString(".*") { fold(Regex.escape(it).replace("\\Q", "").replace("\\E", "")) }
                 for (i in 0 until cities.length()) {
                     val c = cities.getJSONObject(i)
                     val lat = c.getString("lat").toDouble()
@@ -217,7 +226,7 @@ object Geocoder {
                     val cname = c.optString("name", where)
                     val dep = c.optString("display_name").split(",").map { it.trim() }.let { l -> if (l.size >= 3) l[l.size - 3] else "" }
                     val tag = if (dep.isNotBlank() && dep != cname) "$cname ($dep)" else cname
-                    named.addAll(byName(rx, lat, lon, 12000, tag))
+                    named.addAll(byName(what, lat, lon, 0.12, tag))
                     // Photon biaisé sur la ville candidate
                     try {
                         val feats = JSONObject(Http.get("https://photon.komoot.io/api/?limit=4&lang=fr&lat=$lat&lon=$lon&q=" +
@@ -242,7 +251,7 @@ object Geocoder {
             }
         }
         if (what == null && near != null) {
-            val around = byName(nameRx(q), near.lat, near.lon, 30000, "")
+            val around = byName(q, near.lat, near.lon, 0.4, "")
             for (p in around.sortedBy { Geo.dist(near, it.pt) }) named.add(p)
         }
         for (p in named) add(p)
