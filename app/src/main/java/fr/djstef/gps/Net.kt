@@ -175,6 +175,33 @@ object Geocoder {
         val what = if (implicit) ws.dropLast(1).joinToString(" ") else m?.groupValues?.get(1)?.trim()
         val where = if (implicit) ws.last() else m?.groupValues?.get(2)?.trim()
 
+        fun nameRx(t: String): String = t.lowercase().split(Regex("[\\s'’-]+"))
+            .filter { it.length > 1 && it !in STOP && it !in TYPES }
+            .joinToString(".*") { fold(it) }
+        fun byName(rx: String, lat: Double, lon: Double, radius: Int, town: String): List<Place> {
+            if (rx.isBlank()) return emptyList()
+            val res = ArrayList<Place>()
+            try {
+                val oq = "[out:json][timeout:15];nwr[\"name\"~\"$rx\",i](around:$radius,$lat,$lon);out center tags 12;"
+                var txt: String? = null
+                for (e in listOf("https://overpass-api.de/api/interpreter", "https://overpass.kumi.systems/api/interpreter")) {
+                    try { txt = Http.post(e, "data=" + URLEncoder.encode(oq, "UTF-8"), 20000); break } catch (_: Exception) {}
+                }
+                val els = JSONObject(txt ?: "{\"elements\":[]}").getJSONArray("elements")
+                for (k in 0 until els.length()) {
+                    val e = els.getJSONObject(k)
+                    val tags = e.optJSONObject("tags") ?: continue
+                    val ce = e.optJSONObject("center")
+                    val la = if (e.has("lat")) e.getDouble("lat") else ce?.optDouble("lat", Double.NaN) ?: Double.NaN
+                    val lo = if (e.has("lon")) e.getDouble("lon") else ce?.optDouble("lon", Double.NaN) ?: Double.NaN
+                    if (la.isNaN() || lo.isNaN()) continue
+                    val city = tags.optString("addr:city", "").ifBlank { town }
+                    res.add(Place(tags.optString("name") + (if (city.isNotBlank()) ", $city" else ""), Pt(la, lo)))
+                }
+            } catch (_: Exception) {
+            }
+            return res
+        }
         val named = ArrayList<Place>()
         if (what != null && where != null) {
             try {
@@ -190,27 +217,7 @@ object Geocoder {
                     val cname = c.optString("name", where)
                     val dep = c.optString("display_name").split(",").map { it.trim() }.let { l -> if (l.size >= 3) l[l.size - 3] else "" }
                     val tag = if (dep.isNotBlank() && dep != cname) "$cname ($dep)" else cname
-                    if (rx.isNotBlank()) {
-                        try {
-                            val oq = "[out:json][timeout:15];nwr[\"name\"~\"$rx\",i](around:12000,$lat,$lon);out center tags 8;"
-                            var txt: String? = null
-                            for (e in listOf("https://overpass-api.de/api/interpreter", "https://overpass.kumi.systems/api/interpreter")) {
-                                try { txt = Http.post(e, "data=" + URLEncoder.encode(oq, "UTF-8"), 20000); break } catch (_: Exception) {}
-                            }
-                            val els = JSONObject(txt ?: "{\"elements\":[]}").getJSONArray("elements")
-                            for (k in 0 until els.length()) {
-                                val e = els.getJSONObject(k)
-                                val tags = e.optJSONObject("tags") ?: continue
-                                val ce = e.optJSONObject("center")
-                                val la = if (e.has("lat")) e.getDouble("lat") else ce?.optDouble("lat", Double.NaN) ?: Double.NaN
-                                val lo = if (e.has("lon")) e.getDouble("lon") else ce?.optDouble("lon", Double.NaN) ?: Double.NaN
-                                if (la.isNaN() || lo.isNaN()) continue
-                                val town = tags.optString("addr:city", "").ifBlank { tag }
-                                named.add(Place(tags.optString("name") + ", " + town, Pt(la, lo)))
-                            }
-                        } catch (_: Exception) {
-                        }
-                    }
+                    named.addAll(byName(rx, lat, lon, 12000, tag))
                     // Photon biaisé sur la ville candidate
                     try {
                         val feats = JSONObject(Http.get("https://photon.komoot.io/api/?limit=4&lang=fr&lat=$lat&lon=$lon&q=" +
@@ -233,6 +240,10 @@ object Geocoder {
                 }
             } catch (_: Exception) {
             }
+        }
+        if (what == null && near != null) {
+            val around = byName(nameRx(q), near.lat, near.lon, 30000, "")
+            for (p in around.sortedBy { Geo.dist(near, it.pt) }) named.add(p)
         }
         for (p in named) add(p)
 
@@ -271,6 +282,10 @@ object Geocoder {
             val w = norm(where)
             val (hit, rest) = out.partition { norm(it.name).contains(w) }
             return@withContext hit + rest
+        }
+        if (where == null && near != null && ws.size >= 2 && ws[0].lowercase() in TYPES) {
+            val (close, far) = out.partition { Geo.dist(near, it.pt) < 60000.0 }
+            return@withContext close.sortedBy { Geo.dist(near, it.pt) } + far
         }
         out
     }
