@@ -186,3 +186,42 @@ object PoiArt {
         b
     }
 }
+
+/** API Lufop (https://api.lufop.net) : radars fixes, mobiles, feux rouges, vitesse moyenne… Données ODbL 1.0. */
+object Lufop {
+    const val CREDIT = "Données : Lufop.net et contributeurs OpenStreetMap — ODbL 1.0"
+
+    /** Radars autour d'un point (marge m≈10 par km, boîte englobante). Plan gratuit : 200 requêtes/jour. */
+    suspend fun around(key: String, p: Pt): List<Radar> = withContext(Dispatchers.IO) {
+        val url = "https://api.lufop.net/api?key=${URLEncoder.encode(key, "UTF-8")}&format=json&pays=fr" +
+            "&q=${p.lat},${p.lon}&m=80&nbr=200"
+        val txt = Http.get(url, 20000).trim()
+        if (txt.startsWith("{")) {
+            val o = JSONObject(txt)
+            throw java.io.IOException(o.optString("error", o.optString("message", "réponse inattendue")))
+        }
+        val arr = JSONArray(txt)
+        val out = ArrayList<Radar>()
+        for (i in 0 until arr.length()) {
+            val o = arr.getJSONObject(i)
+            val lat = o.optDouble("lat", Double.NaN)
+            val lng = o.optDouble("lng", Double.NaN)
+            if (lat.isNaN() || lng.isNaN()) continue
+            val n = o.optString("name").lowercase()
+            val kind = when {
+                n.contains("mobile") -> "Radar mobile"
+                n.contains("feu") -> "Radar feu rouge"
+                n.contains("tron") || n.contains("moyenne") || n.contains("section") -> "Vitesse moyenne"
+                n.contains("chantier") || n.contains("travaux") -> "Danger"
+                else -> "Radar fixe"
+            }
+            out.add(Radar("lufop-" + o.optString("ID", "$i"), Pt(lat, lng), kind, o.optString("vitesse").toIntOrNull()))
+        }
+        out
+    }
+
+    /** Vérifie la clé sans consommer de quota (format=meta). Retourne le texte brut de l'API. */
+    suspend fun meta(key: String): String = withContext(Dispatchers.IO) {
+        Http.get("https://api.lufop.net/api?key=${URLEncoder.encode(key, "UTF-8")}&format=meta", 15000)
+    }
+}

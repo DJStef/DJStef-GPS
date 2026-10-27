@@ -68,6 +68,7 @@ import org.maplibre.geojson.LineString
 import org.maplibre.geojson.Point
 import java.text.SimpleDateFormat
 import java.util.Calendar
+import java.util.Date
 import java.util.Locale
 import kotlin.math.max
 import kotlin.math.roundToInt
@@ -75,7 +76,7 @@ import kotlin.math.roundToInt
 class MainActivity : Activity() {
 
     companion object {
-        const val VERSION = "0.7"
+        const val VERSION = "0.8"
         const val STYLE_URL = "https://tiles.openfreemap.org/styles/liberty"
 
         // Palette (même esprit que l'appli IPTV : fond bleu nuit, une couleur par section)
@@ -150,6 +151,13 @@ class MainActivity : Activity() {
     private var pendingFav: String? = null
 
     private var fixedRadars: List<Radar> = emptyList()
+    private var baseRadars: List<Radar> = emptyList()
+    private val lufopMap = HashMap<String, Radar>()
+    private var lufopCenter: Pt? = null
+    private var lufopBusy = false
+    private var lufopLastError = ""
+    private var lufopLastTry = 0L
+    private lateinit var creditView: TextView
     private var localReports = ArrayList<Pair<Report, Long>>()
     private var remoteReports: List<Report> = emptyList()
     private val alerted = HashSet<String>()
@@ -199,9 +207,10 @@ class MainActivity : Activity() {
         }
         buildUi(savedInstanceState)
         scope.launch {
-            fixedRadars = RadarRepository.load(this@MainActivity)
+            baseRadars = RadarRepository.load(this@MainActivity)
+            fixedRadars = baseRadars + lufopMap.values
             refreshRadarLayer()
-            if (fixedRadars.isEmpty()) toast("Radars fixes indisponibles (pas de connexion ?)")
+            if (baseRadars.isEmpty()) toast("Radars fixes indisponibles (pas de connexion ?)")
         }
         ensureLocation()
         startPolling()
@@ -446,6 +455,13 @@ class MainActivity : Activity() {
         actions.addView(cancelBtn, LinearLayout.LayoutParams(0, -2, 1f))
         panel.addView(actions, LinearLayout.LayoutParams(-1, -2).also { it.topMargin = dp(10) })
         bottomBox.addView(panel, LinearLayout.LayoutParams(-1, -2))
+        creditView = label(Lufop.CREDIT + "\nhttps://lufop.net", 10f, false, "#C0C7D6")
+        creditView.gravity = Gravity.END
+        creditView.setShadowLayer(3f, 0f, 1f, Color.BLACK)
+        android.text.util.Linkify.addLinks(creditView, android.text.util.Linkify.WEB_URLS)
+        creditView.setLinkTextColor(Color.parseColor("#90CAF9"))
+        creditView.visibility = if (prefs.str("lufopKey", "").isNotBlank()) View.VISIBLE else View.GONE
+        bottomBox.addView(creditView, LinearLayout.LayoutParams(-1, -2).also { it.topMargin = dp(4) })
 
         val bLp = FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM)
         bLp.leftMargin = dp(10)
@@ -741,6 +757,7 @@ class MainActivity : Activity() {
             speak("Attention, vitesse limitée à $lim")
         }
         checkRadars(loc, kmh)
+        maybeFetchLufop(loc)
         if (navigating) {
             recordTrip(loc, kmh)
             navUpdate(loc)
@@ -1134,6 +1151,49 @@ class MainActivity : Activity() {
         } else if (dNext < far && farSaid != stepIdx) {
             farSaid = stepIdx
             speak("Dans ${distSay(dNext)}, ${next.text}")
+        }
+    }
+
+    // ---------- Lufop (radars mobiles, feux rouges…) ----------
+
+    private fun lufopQuotaOk(): Boolean {
+        val day = SimpleDateFormat("yyyyMMdd", Locale.FRANCE).format(Date())
+        if (prefs.str("lufopDay", "") != day) {
+            prefs.setStr("lufopDay", day)
+            prefs.setInt("lufopCount", 0)
+        }
+        return prefs.int("lufopCount", 0) < 190
+    }
+
+    private fun maybeFetchLufop(loc: Location) {
+        val key = prefs.str("lufopKey", "")
+        if (key.isBlank() || lufopBusy || !prefs.bool("showFixed", true)) return
+        val now = System.currentTimeMillis()
+        if (now - lufopLastTry < 120000) return
+        val p = Pt(loc.latitude, loc.longitude)
+        val c = lufopCenter
+        if (c != null && Geo.dist(c, p) < 4000.0) return
+        if (!lufopQuotaOk()) return
+        lufopBusy = true
+        lufopLastTry = now
+        scope.launch {
+            try {
+                val list = Lufop.around(key, p)
+                prefs.setInt("lufopCount", prefs.int("lufopCount", 0) + 1)
+                lufopCenter = p
+                for (r in list) {
+                    // Évite les doublons avec les radars fixes déjà connus (data.gouv.fr)
+                    if (r.kind == "Radar fixe" && baseRadars.any { Math.abs(it.pt.lat - r.pt.lat) < 0.0006 && Math.abs(it.pt.lon - r.pt.lon) < 0.0009 }) continue
+                    lufopMap[r.id] = r
+                }
+                lufopMap.entries.removeAll { Geo.dist(p, it.value.pt) > 30000.0 }
+                fixedRadars = baseRadars + lufopMap.values
+                refreshRadarLayer()
+            } catch (e: Exception) {
+                lufopLastError = e.message ?: "erreur"
+            } finally {
+                lufopBusy = false
+            }
         }
     }
 
@@ -1952,6 +2012,52 @@ class MainActivity : Activity() {
         val c2 = card(content)
         sectionTitle(c2, "ITINÉRAIRE", "#EF5350")
         switchRow(c2, "Éviter les radars", "Cherche un détour (voiture) sans radar fixe, si le trajet reste raisonnable", "avoidRadars", false) { if (dest != null) computeRoute(navigating) }
+        val cl = card(content)
+        sectionTitle(cl, "LUFOP · RADARS MOBILES, FEUX ROUGES…", "#EF5350")
+        cl.addView(label("Clé API gratuite (200 requêtes par jour). Ajoute les radars mobiles, feux rouges et vitesse moyenne de la base Lufop.", 12f, false, "#9AA3B5"))
+        val lk = EditText(this)
+        lk.setText(prefs.str("lufopKey", ""))
+        lk.hint = "Clé API Lufop"
+        lk.setHintTextColor(Color.parseColor("#6B7385"))
+        lk.setTextColor(Color.WHITE)
+        lk.setSingleLine(true)
+        cl.addView(lk)
+        val lres = label(if (lufopLastError.isNotEmpty()) "Dernière erreur : $lufopLastError" else "", 12f, true, "#EF9A9A")
+        cl.addView(button("Enregistrer et tester", RED) {
+            val k = lk.text.toString().trim()
+            prefs.setStr("lufopKey", k)
+            creditView.visibility = if (k.isNotBlank()) View.VISIBLE else View.GONE
+            lufopCenter = null
+            lufopLastTry = 0L
+            lufopLastError = ""
+            if (k.isBlank()) {
+                lufopMap.clear()
+                fixedRadars = baseRadars
+                refreshRadarLayer()
+                lres.text = "Clé retirée."
+                lres.setTextColor(Color.WHITE)
+                return@button
+            }
+            lres.text = "Test en cours…"
+            lres.setTextColor(Color.WHITE)
+            scope.launch {
+                try {
+                    val meta = Lufop.meta(k)
+                    lres.text = "✔ Clé acceptée par Lufop. " + meta.take(160)
+                    lres.setTextColor(Color.parseColor("#81C784"))
+                    me?.let { maybeFetchLufop(it) }
+                } catch (e: Exception) {
+                    lres.text = "✘ Clé refusée ou Lufop injoignable : ${e.message}"
+                    lres.setTextColor(Color.parseColor("#EF9A9A"))
+                }
+            }
+        }, LinearLayout.LayoutParams(-1, -2).also { it.topMargin = dp(8) })
+        cl.addView(lres)
+        val credit = label(Lufop.CREDIT + "\nhttps://lufop.net", 12f, false, "#C0C7D6")
+        android.text.util.Linkify.addLinks(credit, android.text.util.Linkify.WEB_URLS)
+        credit.setLinkTextColor(Color.parseColor("#90CAF9"))
+        cl.addView(credit)
+
         val c3 = card(content)
         sectionTitle(c3, "SERVEUR DE SIGNALEMENTS", "#EF5350")
         c3.addView(label("Radars mobiles, contrôles, dangers signalés par les utilisateurs.", 12f, false, "#9AA3B5"))
@@ -1986,7 +2092,7 @@ class MainActivity : Activity() {
     private fun aboutPage(content: LinearLayout) {
         val c = card(content)
         c.addView(label("DJSTEF GPS · v$VERSION", 18f, true))
-        c.addView(label("Carte : OpenStreetMap et OpenFreeMap\nItinéraires : Valhalla / OSRM (OpenStreetMap)\nRadars fixes : data.gouv.fr (Licence Ouverte 2.0)\nTrafic : TomTom\nCarburants : data.economie.gouv.fr (Licence Ouverte)\nParkings : OpenStreetMap (ODbL)\nVoiture « Concept 3D » : Concept Car © Eric Chadwick / Khronos, CC BY 4.0, base Unity Fan (CC0)\nLimitations de vitesse : OpenStreetMap (Overpass)\nAdresses : Nominatim", 13f, false, "#C0C7D6"))
+        c.addView(label("Carte : OpenStreetMap et OpenFreeMap\nItinéraires : Valhalla / OSRM (OpenStreetMap)\nRadars fixes : data.gouv.fr (Licence Ouverte 2.0)\nTrafic : TomTom\nCarburants : data.economie.gouv.fr (Licence Ouverte)\nRadars : Lufop.net et contributeurs OpenStreetMap (ODbL 1.0), lufop.net\nParkings : OpenStreetMap (ODbL)\nVoiture « Concept 3D » : Concept Car © Eric Chadwick / Khronos, CC BY 4.0, base Unity Fan (CC0)\nLimitations de vitesse : OpenStreetMap (Overpass)\nAdresses : Nominatim", 13f, false, "#C0C7D6"))
         val c2 = card(content)
         c2.addView(label("Les limitations de vitesse et les radars peuvent être incomplets ou périmés : respecte toujours la signalisation sur la route.", 13f, false, "#9AA3B5"))
     }
