@@ -76,7 +76,7 @@ import kotlin.math.roundToInt
 class MainActivity : Activity() {
 
     companion object {
-        const val VERSION = "0.23"
+        const val VERSION = "0.24"
         const val STYLE_URL = "https://tiles.openfreemap.org/styles/liberty"
         const val STYLE_DARK = "https://tiles.openfreemap.org/styles/dark"
 
@@ -438,6 +438,7 @@ class MainActivity : Activity() {
         navBanner.gravity = Gravity.CENTER_VERTICAL
         navBanner.background = gradBg(GREEN, 18)
         navBanner.setPadding(dp(12), dp(8), dp(12), dp(8))
+        navBanner.background.alpha = 222
         navBanner.visibility = View.GONE
         navArrow = label("↑", 36f, true)
         navArrow.gravity = Gravity.CENTER
@@ -458,6 +459,7 @@ class MainActivity : Activity() {
         radarBox.gravity = Gravity.CENTER_VERTICAL
         radarBox.background = gradBg(RED, 18)
         radarBox.setPadding(dp(8), dp(5), dp(12), dp(5))
+        radarBox.background.alpha = 222
         radarBox.visibility = View.GONE
         radarIcon = ImageView(this)
         radarBox.addView(radarIcon, LinearLayout.LayoutParams(dp(40), dp(40)))
@@ -564,7 +566,7 @@ class MainActivity : Activity() {
         navBand = LinearLayout(this)
         navBand.orientation = LinearLayout.HORIZONTAL
         navBand.gravity = Gravity.CENTER_VERTICAL
-        navBand.setBackgroundColor(Color.parseColor("#F2101828"))
+        navBand.setBackgroundColor(Color.parseColor("#DD101828"))
         navBand.visibility = View.GONE
         val navInfoCol = LinearLayout(this)
         navInfoCol.orientation = LinearLayout.VERTICAL
@@ -591,6 +593,7 @@ class MainActivity : Activity() {
         bottomBox.addOnLayoutChangeListener { _, _, top, _, bottom, _, _, _, _ ->
             bottomH = bottom - top
             applyMapMargins()
+            applyNavPadding()
         }
 
         root.setOnApplyWindowInsetsListener { _, ins ->
@@ -612,7 +615,7 @@ class MainActivity : Activity() {
         if (navigating) {
             lp.setMargins(0, 0, 0, 0)
             navBand.setPadding(dp(12), dp(8), dp(12), dp(8))
-            creditView.setBackgroundColor(Color.parseColor("#FF101828"))
+            creditView.setBackgroundColor(Color.parseColor("#DD101828"))
             creditView.setPadding(dp(12), 0, dp(12), bottomInset + dp(4))
             (creditView.layoutParams as LinearLayout.LayoutParams).topMargin = 0
         } else {
@@ -625,11 +628,21 @@ class MainActivity : Activity() {
         applyMapBottom()
     }
 
+    /** Place la voiture à ~74 % de la hauteur : on voit beaucoup plus de route devant. */
+    private fun applyNavPadding() {
+        val m = map ?: return
+        if (!navigating || !::rootLayout.isInitialized) return
+        val h = rootLayout.height
+        if (h <= 0) return
+        val bottom = bottomH + bottomInset
+        val top = (2 * 0.74 * h - h + bottom).toInt().coerceIn(0, (h * 0.8).toInt())
+        m.setPadding(0, top, 0, bottom)
+        positionCar()
+    }
+
     private fun applyMapBottom() {
         val lp = mapView.layoutParams as FrameLayout.LayoutParams
-        // Vitesse et limite flottent sur la carte, à gauche, au-dessus du bandeau : la carte s'arrête sous elles
-        val over = if (navigating && ::infoRow.isInitialized && infoRow.height > 0) infoRow.height + dp(8) else 0
-        val want = if (navigating) (bottomH - over).coerceAtLeast(0) else 0
+        val want = 0 // la carte passe sous le bandeau semi-transparent ; la voiture est remontée par le padding de la caméra
         if (lp.bottomMargin != want) {
             lp.bottomMargin = want
             mapView.layoutParams = lp
@@ -639,7 +652,7 @@ class MainActivity : Activity() {
     private fun applyMapMargins() {
         val ui = map?.uiSettings ?: return
         applyMapBottom()
-        val b = if (navigating) dp(8) else bottomH + bottomInset + dp(16)
+        val b = bottomH + bottomInset + dp(16)
         ui.logoGravity = Gravity.BOTTOM or Gravity.END
         ui.attributionGravity = Gravity.BOTTOM or Gravity.END
         ui.setLogoMargins(0, 0, dp(10), b)
@@ -1506,7 +1519,7 @@ class MainActivity : Activity() {
         if (prefs.bool("keepOn", true)) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         hideKeyboard()
         setResults(false)
-        map?.setPadding(0, dp(200), 0, dp(40))
+        applyNavPadding()
         val first = r.steps.firstOrNull()
         navArrow.text = arrowFor(first?.kind ?: 1)
         navDist.text = ""
