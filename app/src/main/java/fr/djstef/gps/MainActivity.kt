@@ -76,7 +76,7 @@ import kotlin.math.roundToInt
 class MainActivity : Activity() {
 
     companion object {
-        const val VERSION = "0.25"
+        const val VERSION = "0.26"
         const val STYLE_URL = "https://tiles.openfreemap.org/styles/liberty"
         const val STYLE_DARK = "https://tiles.openfreemap.org/styles/dark"
 
@@ -140,6 +140,9 @@ class MainActivity : Activity() {
     private var topInset = 0
     private var bottomInset = 0
     private var bottomH = 0
+    private var leftInset = 0
+    private var rightInset = 0
+    private var sideBtns: List<TextView> = emptyList()
 
     private var tts: TextToSpeech? = null
     private var ttsReady = false
@@ -243,6 +246,7 @@ class MainActivity : Activity() {
             }
         }
         buildUi(savedInstanceState)
+        goFullscreen()
         scope.launch {
             baseRadars = RadarRepository.load(this@MainActivity)
             fixedRadars = baseRadars + lufopMap.values
@@ -383,6 +387,7 @@ class MainActivity : Activity() {
             map = m
             m.cameraPosition = CameraPosition.Builder().target(LatLng(46.6, 2.5)).zoom(5.0).build()
             m.uiSettings.isCompassEnabled = false
+            m.uiSettings.isLogoEnabled = false
             styleNight = wantNight()
             m.setStyle(Style.Builder().fromUri(if (styleNight) STYLE_DARK else STYLE_URL)) { st -> onStyleReady(m, st) }
         }
@@ -484,7 +489,9 @@ class MainActivity : Activity() {
         zout.visibility = View.GONE
         zoomInBtn = zin
         zoomOutBtn = zout
-        for (b in listOf(recBtn, repBtn, trafficBtn, zin, zout, muteBtn, viewBtn)) {
+        sideBtns = listOf(recBtn, repBtn, trafficBtn, zin, zout, muteBtn, viewBtn)
+        for (b in sideBtns) {
+            b.alpha = 0.82f
             (b.layoutParams as LinearLayout.LayoutParams).topMargin = dp(8)
             side.addView(b)
         }
@@ -505,8 +512,10 @@ class MainActivity : Activity() {
         speedView = SpeedBubble(this)
         limitView = SignView(this)
         limitView.visibility = View.GONE
-        infoRow.addView(limitView, LinearLayout.LayoutParams(dp(62), dp(62)).also { it.leftMargin = dp(15); it.bottomMargin = dp(2) })
-        infoRow.addView(speedView, LinearLayout.LayoutParams(dp(92), dp(92)))
+        limitView.alpha = 1f
+        speedView.alpha = 1f
+        infoRow.addView(limitView, LinearLayout.LayoutParams(dp(84), dp(84)).also { it.bottomMargin = dp(6) })
+        infoRow.addView(speedView, LinearLayout.LayoutParams(dp(84), dp(84)))
         bottomBox.addView(infoRow, LinearLayout.LayoutParams(-1, -2).also { it.bottomMargin = dp(8) })
 
         panel = LinearLayout(this)
@@ -566,7 +575,7 @@ class MainActivity : Activity() {
         navBand = LinearLayout(this)
         navBand.orientation = LinearLayout.HORIZONTAL
         navBand.gravity = Gravity.CENTER_VERTICAL
-        navBand.setBackgroundColor(Color.parseColor("#DD101828"))
+        navBand.setBackgroundColor(Color.parseColor("#EE101828"))
         navBand.visibility = View.GONE
         val navInfoCol = LinearLayout(this)
         navInfoCol.orientation = LinearLayout.VERTICAL
@@ -597,10 +606,12 @@ class MainActivity : Activity() {
         }
 
         root.setOnApplyWindowInsetsListener { _, ins ->
-            topInset = ins.systemWindowInsetTop
-            bottomInset = ins.systemWindowInsetBottom
-            topBox.setPadding(dp(10), topInset + dp(10), dp(10), 0)
-            applyBottomMargins()
+            val dc = if (android.os.Build.VERSION.SDK_INT >= 28) ins.displayCutout else null
+            topInset = maxOf(ins.systemWindowInsetTop, dc?.safeInsetTop ?: 0)
+            bottomInset = maxOf(ins.systemWindowInsetBottom, dc?.safeInsetBottom ?: 0)
+            leftInset = maxOf(ins.systemWindowInsetLeft, dc?.safeInsetLeft ?: 0)
+            rightInset = maxOf(ins.systemWindowInsetRight, dc?.safeInsetRight ?: 0)
+            applyLayout()
             ins
         }
 
@@ -608,35 +619,109 @@ class MainActivity : Activity() {
         updateModeButtons()
     }
 
-    /** En guidage, le bandeau d'infos occupe toute la largeur en bas et la carte s'arrête au-dessus. */
+    private fun isLandscape() = resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
+
+    /** Mise en page selon l'orientation : en paysage, le guidage reste dans une colonne à gauche. */
+    private fun applyLayout() {
+        if (!::topBox.isInitialized || !::bottomBox.isInitialized || !::navBand.isInitialized) return
+        val land = isLandscape()
+        val w = resources.displayMetrics.widthPixels
+        val colW = if (land) (w * 0.46).toInt() else FrameLayout.LayoutParams.MATCH_PARENT
+        (topBox.layoutParams as FrameLayout.LayoutParams).also { it.width = colW; topBox.layoutParams = it }
+        topBox.setPadding(dp(10) + leftInset, topInset + dp(10), if (land) dp(10) else dp(10) + rightInset, 0)
+        (bottomBox.layoutParams as FrameLayout.LayoutParams).also { it.width = colW; bottomBox.layoutParams = it }
+        val sz = if (land) 70 else 84
+        infoRow.orientation = if (land) LinearLayout.HORIZONTAL else LinearLayout.VERTICAL
+        (limitView.layoutParams as LinearLayout.LayoutParams).also {
+            it.width = dp(sz); it.height = dp(sz)
+            it.bottomMargin = if (land) 0 else dp(6)
+            it.rightMargin = if (land) dp(8) else 0
+        }
+        (speedView.layoutParams as LinearLayout.LayoutParams).also { it.width = dp(sz); it.height = dp(sz) }
+        limitView.requestLayout()
+        speedView.requestLayout()
+        navDestV.visibility = if (land) View.GONE else View.VISIBLE
+        val bs = if (land) 40 else 44
+        for (b in sideBtns) {
+            (b.layoutParams as LinearLayout.LayoutParams).also { it.width = dp(bs); it.height = dp(bs); it.topMargin = dp(if (land) 5 else 8) }
+            b.requestLayout()
+        }
+        trafficBtn.visibility = if (land && navigating) View.GONE else View.VISIBLE
+        sideBox?.let { sv ->
+            (sv.layoutParams as FrameLayout.LayoutParams).also { it.rightMargin = dp(10) + rightInset; sv.layoutParams = it }
+        }
+        applyBottomMargins()
+    }
+
+    /** En guidage, le bandeau d'infos occupe toute la largeur de la colonne en bas, fond quasi opaque. */
     private fun applyBottomMargins() {
         if (!::bottomBox.isInitialized || !::navBand.isInitialized) return
         val lp = bottomBox.layoutParams as FrameLayout.LayoutParams
+        val land = isLandscape()
+        infoRow.setPadding(if (navigating) leftInset + dp(10) else 0, 0, 0, 0)
         if (navigating) {
             lp.setMargins(0, 0, 0, 0)
-            navBand.setPadding(dp(12), dp(8), dp(12), dp(8))
-            creditView.setBackgroundColor(Color.parseColor("#DD101828"))
-            creditView.setPadding(dp(12), 0, dp(12), bottomInset + dp(4))
+            navBand.setPadding(dp(12) + leftInset, dp(8), dp(12), dp(6))
+            creditView.setBackgroundColor(Color.parseColor("#EE101828"))
+            creditView.setPadding(dp(12) + leftInset, 0, dp(12), bottomInset + dp(4))
+            creditView.textSize = 9f
             (creditView.layoutParams as LinearLayout.LayoutParams).topMargin = 0
         } else {
-            lp.setMargins(dp(10), 0, dp(10), bottomInset + dp(10))
-            creditView.setBackgroundColor(Color.TRANSPARENT)
-            creditView.setPadding(0, 0, 0, 0)
+            lp.setMargins(dp(10) + leftInset, 0, if (land) 0 else dp(10) + rightInset, bottomInset + dp(10))
+            creditView.setBackgroundColor(Color.parseColor("#B0101828"))
+            creditView.setPadding(dp(6), dp(2), dp(6), dp(2))
+            creditView.textSize = 10f
             (creditView.layoutParams as LinearLayout.LayoutParams).topMargin = dp(4)
         }
         bottomBox.layoutParams = lp
         applyMapBottom()
     }
 
-    /** Place la voiture à ~74 % de la hauteur : on voit beaucoup plus de route devant. */
+    private fun goFullscreen() {
+        try {
+            if (android.os.Build.VERSION.SDK_INT >= 28) {
+                val a = window.attributes
+                a.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+                window.attributes = a
+            }
+            @Suppress("DEPRECATION")
+            window.decorView.systemUiVisibility = (View.SYSTEM_UI_FLAG_LAYOUT_STABLE or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
+                View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
+                View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY)
+        } catch (_: Exception) {
+        }
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) goFullscreen()
+    }
+
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+        super.onConfigurationChanged(newConfig)
+        rootLayout.post {
+            applyLayout()
+            applyNavPadding()
+            positionCar()
+        }
+    }
+
+    /** Place la voiture vers le bas de la zone de carte visible. */
     private fun applyNavPadding() {
         val m = map ?: return
         if (!navigating || !::rootLayout.isInitialized) return
         val h = rootLayout.height
-        if (h <= 0) return
-        val bottom = bottomH + bottomInset
-        val top = (2 * 0.74 * h - h + bottom).toInt().coerceIn(0, (h * 0.8).toInt())
-        m.setPadding(0, top, 0, bottom)
+        val w = rootLayout.width
+        if (h <= 0 || w <= 0) return
+        if (isLandscape()) {
+            val left = (w * 0.46).toInt()
+            val top = (2 * 0.70 * h - h).toInt().coerceIn(0, (h * 0.8).toInt())
+            m.setPadding(left, top, 0, bottomInset)
+        } else {
+            val bottom = bottomH + bottomInset
+            val top = (2 * 0.74 * h - h + bottom).toInt().coerceIn(0, (h * 0.8).toInt())
+            m.setPadding(0, top, 0, bottom)
+        }
         positionCar()
     }
 
@@ -656,7 +741,7 @@ class MainActivity : Activity() {
         ui.logoGravity = Gravity.BOTTOM or Gravity.END
         ui.attributionGravity = Gravity.BOTTOM or Gravity.END
         ui.setLogoMargins(0, 0, dp(10), b)
-        ui.setAttributionMargins(0, 0, dp(96), b)
+        ui.setAttributionMargins(0, 0, dp(10), if (isLandscape()) bottomInset + dp(6) else b)
     }
 
     private fun updateModeButtons() {
