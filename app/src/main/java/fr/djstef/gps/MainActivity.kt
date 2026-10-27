@@ -76,7 +76,7 @@ import kotlin.math.roundToInt
 class MainActivity : Activity() {
 
     companion object {
-        const val VERSION = "0.21"
+        const val VERSION = "0.22"
         const val STYLE_URL = "https://tiles.openfreemap.org/styles/liberty"
         const val STYLE_DARK = "https://tiles.openfreemap.org/styles/dark"
 
@@ -149,6 +149,9 @@ class MainActivity : Activity() {
     private var lastBearing = 0f
     private var follow = true
     private var zoomBoost = 0.0
+    private lateinit var carView: ImageView
+    private var carTopBmp: android.graphics.Bitmap? = null
+    private var carRearBmp: android.graphics.Bitmap? = null
     private lateinit var infoRow: LinearLayout
     private lateinit var navBand: LinearLayout
     private lateinit var navEta: TextView
@@ -371,6 +374,11 @@ class MainActivity : Activity() {
         mapView = MapView(this)
         mapView.onCreate(savedInstanceState)
         root.addView(mapView, FrameLayout.LayoutParams(-1, -1))
+        // La voiture est une vue Android posée sur la carte : aucun clignotement lié aux mises à jour de la carte
+        carView = ImageView(this)
+        carView.scaleType = ImageView.ScaleType.FIT_XY
+        carView.visibility = View.INVISIBLE
+        root.addView(carView, FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.START))
         mapView.getMapAsync { m ->
             map = m
             m.cameraPosition = CameraPosition.Builder().target(LatLng(46.6, 2.5)).zoom(5.0).build()
@@ -556,22 +564,22 @@ class MainActivity : Activity() {
         navBand = LinearLayout(this)
         navBand.orientation = LinearLayout.HORIZONTAL
         navBand.gravity = Gravity.CENTER_VERTICAL
-        navBand.setBackgroundColor(Color.parseColor("#FF101828"))
+        navBand.setBackgroundColor(Color.parseColor("#F2101828"))
         navBand.visibility = View.GONE
         val navInfoCol = LinearLayout(this)
         navInfoCol.orientation = LinearLayout.VERTICAL
-        navEta = label("", 20f, true)
-        navSub = label("", 13f, false, "#C0C7D6")
+        navEta = label("", 26f, true)
+        navSub = label("", 14f, false, "#C0C7D6")
         navDestV = label("", 12f, false, "#9AA3B5")
         navDestV.maxLines = 1
         navDestV.ellipsize = android.text.TextUtils.TruncateAt.END
         navInfoCol.addView(navEta)
         navInfoCol.addView(navSub)
         navInfoCol.addView(navDestV)
-        navBand.addView(navInfoCol, LinearLayout.LayoutParams(0, -2, 1f).also { it.leftMargin = dp(10); it.rightMargin = dp(8) })
+        navBand.addView(navInfoCol, LinearLayout.LayoutParams(0, -2, 1f).also { it.leftMargin = dp(8); it.rightMargin = dp(6) })
         val navStop = button("Arrêter", RED) { stopNavigation() }
-        navStop.textSize = 15f
-        navBand.addView(navStop, LinearLayout.LayoutParams(dp(104), dp(52)))
+        navStop.textSize = 14f
+        navBand.addView(navStop, LinearLayout.LayoutParams(dp(92), dp(48)))
         bottomBox.addView(navBand, LinearLayout.LayoutParams(-1, -2))
         bottomBox.addView(creditView, LinearLayout.LayoutParams(-1, -2).also { it.topMargin = dp(4) })
 
@@ -653,8 +661,8 @@ class MainActivity : Activity() {
             (speedView.parent as? android.view.ViewGroup)?.removeView(speedView)
             (limitView.parent as? android.view.ViewGroup)?.removeView(limitView)
             if (navigating) {
-                navBand.addView(speedView, 0, LinearLayout.LayoutParams(dp(74), dp(74)))
-                navBand.addView(limitView, 1, LinearLayout.LayoutParams(dp(66), dp(66)).also { it.leftMargin = dp(8) })
+                navBand.addView(speedView, 0, LinearLayout.LayoutParams(dp(66), dp(66)))
+                navBand.addView(limitView, 1, LinearLayout.LayoutParams(dp(58), dp(58)).also { it.leftMargin = dp(6) })
             } else {
                 infoRow.addView(speedView, 0, LinearLayout.LayoutParams(dp(92), dp(92)))
                 infoRow.addView(limitView, 1, LinearLayout.LayoutParams(dp(84), dp(84)).also { it.leftMargin = dp(8) })
@@ -760,6 +768,7 @@ class MainActivity : Activity() {
                 setDestination(Pt(ll.latitude, ll.longitude), "Point choisi sur la carte")
                 true
             }
+            m.addOnCameraMoveListener { positionCar() }
             m.addOnCameraMoveStartedListener { reason ->
                 if (reason == MapLibreMap.OnCameraMoveStartedListener.REASON_API_GESTURE) follow = false
             }
@@ -826,10 +835,14 @@ class MainActivity : Activity() {
         val st = style ?: return
         val model = prefs.int("car", 0)
         val col = Color.parseColor(prefs.str("carColor", CarSprites.COLORS[0]))
+        val top = CarSprites.draw(model, col)
+        val rear = CarSprites.drawRear(model, col)
+        carTopBmp = top
+        carRearBmp = rear
         st.removeImage("car-top")
-        st.addImage("car-top", CarSprites.draw(model, col))
+        st.addImage("car-top", top)
         st.removeImage("car-rear")
-        st.addImage("car-rear", CarSprites.drawRear(model, col))
+        st.addImage("car-rear", rear)
         applyCarMode()
     }
 
@@ -850,9 +863,70 @@ class MainActivity : Activity() {
         me?.let { moveCamera(it) }
     }
 
+    /** Facteur de taille selon le zoom (mêmes paliers que l'ancienne icône : 1,0 à zoom 17,3). */
+    private fun zoomFactor(z: Double): Double {
+        val st = listOf(14.0 to 0.35, 16.0 to 0.65, 17.3 to 1.0, 18.0 to 1.25, 19.0 to 1.7, 20.0 to 2.2)
+        if (z <= st.first().first) return st.first().second
+        if (z >= st.last().first) return st.last().second
+        for (i in 0 until st.size - 1) {
+            val (z0, v0) = st[i]
+            val (z1, v1) = st[i + 1]
+            if (z in z0..z1) return v0 + (v1 - v0) * (z - z0) / (z1 - z0)
+        }
+        return 1.0
+    }
+
+    /** Place et oriente la voiture : au centre de l'écran en suivi, sinon à sa position projetée. */
+    private fun positionCar() {
+        if (!::carView.isInitialized) return
+        val m = map ?: return
+        val l = me
+        val bmp = (if (carMode3d()) carRearBmp else carTopBmp)
+        if (l == null || bmp == null || mapView.width == 0) {
+            carView.visibility = View.INVISIBLE
+            return
+        }
+        val cp = m.cameraPosition
+        val size = prefs.float("carSize", 1f)
+        val is3d = carMode3d()
+        val scale = ((if (is3d) 0.5 else 0.4) * size * zoomFactor(cp.zoom)).toFloat()
+        val w = bmp.width
+        val h = bmp.height
+        if (carView.layoutParams.width != w || carView.layoutParams.height != h) {
+            val lp = carView.layoutParams
+            lp.width = w
+            lp.height = h
+            carView.layoutParams = lp
+        }
+        val x: Float
+        val y: Float
+        if (follow) {
+            val pad = m.padding
+            x = mapView.width / 2f + (pad[0] - pad[2]) / 2f
+            y = pad[1] + (mapView.height - pad[1] - pad[3]) / 2f
+        } else {
+            val pt = m.projection.toScreenLocation(LatLng(l.latitude, l.longitude))
+            x = pt.x
+            y = pt.y
+        }
+        val px = w / 2f
+        val py = if (is3d) h.toFloat() else h / 2f
+        carView.pivotX = px
+        carView.pivotY = py
+        carView.scaleX = scale
+        carView.scaleY = scale
+        carView.rotation = if (is3d) 0f else ((lastBearing - cp.bearing).toFloat())
+        carView.translationX = x - px
+        carView.translationY = y - py
+        carView.visibility = View.VISIBLE
+    }
+
     private fun applyCarMode() {
         val layer = style?.getLayerAs<SymbolLayer>("me-layer") ?: return
         val size = prefs.float("carSize", 1f)
+        layer.setProperties(PropertyFactory.visibility(Property.NONE))
+        carView.setImageBitmap(if (carMode3d()) carRearBmp else carTopBmp)
+        positionCar()
         if (carMode3d()) {
             // Vue de derrière, « debout » face à la caméra inclinée
             layer.setProperties(
@@ -909,6 +983,7 @@ class MainActivity : Activity() {
     }
 
     private fun updateMeLayer(loc: Location) {
+        positionCar()
         val src = style?.getSourceAs<GeoJsonSource>("me") ?: return
         val f = point(Pt(loc.latitude, loc.longitude))
         f.addNumberProperty("bearing", lastBearing.toDouble())
@@ -930,6 +1005,7 @@ class MainActivity : Activity() {
             b.zoom(if (first) 14.0 else max(m.cameraPosition.zoom, 14.0)).tilt(0.0).bearing(0.0)
         }
         m.animateCamera(CameraUpdateFactory.newCameraPosition(b.build()), 700)
+        positionCar()
     }
 
     private fun recenter() {
@@ -1519,7 +1595,7 @@ class MainActivity : Activity() {
         val shown = if (te != null && nowMs - te.second < 360000) te.first else remTime
         etaView.text = "Arrivée ${eta(shown)}"
         subView.text = summary(shown, remain) + (if (te != null && trafficDelay >= 120) " · trafic +${(trafficDelay / 60).roundToInt()} min" else "")
-        navEta.text = etaView.text
+        navEta.text = etaView.text.toString().removePrefix("Arrivée ")
         navSub.text = subView.text
         // Zoom d'approche : rond-point (dès 300 m) et virages (dès 150 m), puis retour au zoom choisi
         val roundabout = next.kind == 26 || next.kind == 27
