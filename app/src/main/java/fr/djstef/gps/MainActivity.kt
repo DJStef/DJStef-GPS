@@ -76,7 +76,7 @@ import kotlin.math.roundToInt
 class MainActivity : Activity() {
 
     companion object {
-        const val VERSION = "0.28"
+        const val VERSION = "0.29"
         const val STYLE_URL = "https://tiles.openfreemap.org/styles/liberty"
         const val STYLE_DARK = "https://tiles.openfreemap.org/styles/dark"
 
@@ -789,17 +789,41 @@ class MainActivity : Activity() {
 
     // ---------- Carte ----------
 
+    /** Élargit les routes du fond de carte (surtout aux zooms de guidage) pour bien voir où on va. */
+    private fun widenRoads(st: Style) {
+        val re = Regex("^(road|tunnel|bridge)_(motorway_link|motorway|trunk_primary|secondary_tertiary|minor|street|link|service_track)(_casing)?$")
+        for (l in st.layers) {
+            if (l !is LineLayer) continue
+            val m = re.find(l.id) ?: continue
+            val cls = m.groupValues[2]
+            val base = when (cls) {
+                "motorway", "trunk_primary" -> floatArrayOf(2f, 5f, 12f, 26f, 48f)
+                "secondary_tertiary" -> floatArrayOf(1.5f, 4f, 10f, 22f, 42f)
+                "service_track" -> floatArrayOf(0.5f, 2f, 5f, 12f, 24f)
+                else -> floatArrayOf(1f, 3f, 8f, 18f, 36f)
+            }
+            val add = if (m.groupValues[3].isNotEmpty()) floatArrayOf(1f, 1.5f, 2.5f, 4f, 6f) else floatArrayOf(0f, 0f, 0f, 0f, 0f)
+            val z = floatArrayOf(10f, 13f, 15f, 17f, 19f)
+            val stops = Array(5) { Expression.stop(z[it], base[it] + add[it]) }
+            try {
+                l.setProperties(PropertyFactory.lineWidth(Expression.interpolate(Expression.exponential(1.4f), Expression.zoom(), *stops)))
+            } catch (_: Exception) {
+            }
+        }
+    }
+
     private fun onStyleReady(m: MapLibreMap, st: Style) {
         style = st
         // Pas de fondu des symboles (la voiture clignotait à chaque mise à jour de position)
         st.transition = org.maplibre.android.style.layers.TransitionOptions(0, 0, false)
+        widenRoads(st)
         for (id in listOf("radars", "reports", "route", "dest", "me")) {
             st.addSource(GeoJsonSource(id, FeatureCollection.fromFeatures(emptyList<Feature>())))
         }
         st.addLayer(
             LineLayer("route-casing", "route").withProperties(
                 PropertyFactory.lineColor("#FFFFFF"),
-                PropertyFactory.lineWidth(Expression.interpolate(Expression.exponential(1.6f), Expression.zoom(), Expression.stop(8, 8f), Expression.stop(12, 12f), Expression.stop(15, 22f), Expression.stop(17, 36f), Expression.stop(19, 60f))),
+                PropertyFactory.lineWidth(Expression.interpolate(Expression.exponential(1.6f), Expression.zoom(), Expression.stop(8, 6f), Expression.stop(12, 8f), Expression.stop(15, 12f), Expression.stop(17, 20f), Expression.stop(19, 34f))),
                 PropertyFactory.lineCap(Property.LINE_CAP_ROUND),
                 PropertyFactory.lineJoin(Property.LINE_JOIN_ROUND)
             )
@@ -807,7 +831,7 @@ class MainActivity : Activity() {
         st.addLayer(
             LineLayer("route-layer", "route").withProperties(
                 PropertyFactory.lineColor("#1A4FB5"),
-                PropertyFactory.lineWidth(Expression.interpolate(Expression.exponential(1.6f), Expression.zoom(), Expression.stop(8, 5f), Expression.stop(12, 8f), Expression.stop(15, 16f), Expression.stop(17, 28f), Expression.stop(19, 48f))),
+                PropertyFactory.lineWidth(Expression.interpolate(Expression.exponential(1.6f), Expression.zoom(), Expression.stop(8, 3f), Expression.stop(12, 5f), Expression.stop(15, 8f), Expression.stop(17, 13f), Expression.stop(19, 22f))),
                 PropertyFactory.lineCap(Property.LINE_CAP_ROUND),
                 PropertyFactory.lineJoin(Property.LINE_JOIN_ROUND)
             )
@@ -2162,7 +2186,7 @@ class MainActivity : Activity() {
         try {
             if (st.getSource("traffic") == null) {
                 val ts = TileSet("2.2.0", "https://api.tomtom.com/traffic/map/4/tile/flow/relative0/{z}/{x}/{y}.png?key=$key")
-                ts.setMaxZoom(18f)
+                ts.setMaxZoom(22f)
                 st.addSource(RasterSource("traffic", ts, 256))
                 st.addLayerBelow(
                     RasterLayer("traffic-layer", "traffic").withProperties(PropertyFactory.rasterOpacity(0.85f)),
