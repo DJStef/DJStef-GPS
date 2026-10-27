@@ -150,6 +150,8 @@ object Http {
 // ---------- Recherche d'adresses (Nominatim / OpenStreetMap) ----------
 
 object Geocoder {
+    /** Dernier diagnostic de recherche (affiché sous la liste de résultats). */
+    @Volatile var diag: String = ""
     private val STOP = setOf("le", "la", "les", "l", "un", "une", "de", "du", "des", "d", "au", "aux", "et", "chez")
     private val TYPES = setOf(
         "camping", "campings", "restaurant", "hotel", "hôtel", "boulangerie", "pharmacie", "supermarche",
@@ -163,6 +165,7 @@ object Geocoder {
     /** Recherche d'adresses et de lieux (« camping les peupliers à colombier », commerces…). */
     suspend fun search(q0: String, near: Pt? = null): List<Place> = withContext(Dispatchers.IO) {
         val q = q0.trim()
+        diag = if (near == null) "position inconnue" else "position ${"%.3f".format(near.lat)},${"%.3f".format(near.lon)}"
         val out = ArrayList<Place>()
         fun add(pl: Place) {
             if (out.none { Geo.dist(it.pt, pl.pt) < 120.0 }) out.add(pl)
@@ -196,6 +199,7 @@ object Geocoder {
                     var url = "https://photon.komoot.io/api/?limit=12&lang=fr&bbox=$bbox&q=" + URLEncoder.encode(words, "UTF-8")
                     if (t != null) url += "&osm_tag=$t"
                     val feats = JSONObject(Http.get(url)).optJSONArray("features") ?: JSONArray()
+                    diag += " · zone ${feats.length()} rés."
                     for (k in 0 until feats.length()) {
                         val f = feats.getJSONObject(k)
                         val pr = f.optJSONObject("properties") ?: continue
@@ -208,7 +212,8 @@ object Geocoder {
                         }
                         if (parts.isNotEmpty()) res.add(Place(parts.joinToString(", "), Pt(co.getDouble(1), co.getDouble(0))))
                     }
-                } catch (_: Exception) {
+                } catch (e: Exception) {
+                    diag += " · zone erreur ${e.message}"
                 }
             }
             return res

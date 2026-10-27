@@ -76,7 +76,7 @@ import kotlin.math.roundToInt
 class MainActivity : Activity() {
 
     companion object {
-        const val VERSION = "0.15"
+        const val VERSION = "0.16"
         const val STYLE_URL = "https://tiles.openfreemap.org/styles/liberty"
 
         // Palette (même esprit que l'appli IPTV : fond bleu nuit, une couleur par section)
@@ -876,6 +876,7 @@ class MainActivity : Activity() {
                         goTo(place)
                     })
                 }
+                if (Geocoder.diag.isNotBlank()) addRow("ℹ v$VERSION · " + Geocoder.diag, {})
                 setResults(true)
             } catch (e: Exception) {
                 toast("Recherche impossible : ${e.message}")
