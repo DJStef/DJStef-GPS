@@ -150,12 +150,89 @@ object Http {
 // ---------- Recherche d'adresses (Nominatim / OpenStreetMap) ----------
 
 object Geocoder {
-    /** Recherche d'adresses et de lieux (campings, commerces…) : Photon (OSM) puis Nominatim, fusionnés. */
-    suspend fun search(q: String, near: Pt? = null): List<Place> = withContext(Dispatchers.IO) {
+    private val STOP = setOf("le", "la", "les", "l", "un", "une", "de", "du", "des", "d", "au", "aux", "et", "chez")
+    private val TYPES = setOf(
+        "camping", "campings", "restaurant", "hotel", "hôtel", "boulangerie", "pharmacie", "supermarche",
+        "supermarché", "garage", "mairie", "gare", "parking", "bar", "cafe", "café", "gite", "gîte", "centre", "plage"
+    )
+
+    private fun fold(w: String) = w.map {
+        if (it in "àâäáéèêëíìîïóòôöúùûüçœæ") '.' else it
+    }.joinToString("")
+
+    /** Recherche d'adresses et de lieux (« camping les peupliers à colombier », commerces…). */
+    suspend fun search(q0: String, near: Pt? = null): List<Place> = withContext(Dispatchers.IO) {
+        val q = q0.trim()
         val out = ArrayList<Place>()
         fun add(pl: Place) {
             if (out.none { Geo.dist(it.pt, pl.pt) < 120.0 }) out.add(pl)
         }
+        // « nom à ville » → nom + ville
+        val m = Regex("^(.{3,}?)(?:\\s+(?:à|a|au|aux|près de|pres de|sur|dans|en)\\s+|\\s*,\\s*|\\s+-\\s+)(.{3,})$", RegexOption.IGNORE_CASE).find(q)
+        val what = m?.groupValues?.get(1)?.trim()
+        val where = m?.groupValues?.get(2)?.trim()
+
+        val named = ArrayList<Place>()
+        if (what != null && where != null) {
+            try {
+                val cities = JSONArray(Http.get(
+                    "https://nominatim.openstreetmap.org/search?format=jsonv2&limit=4&countrycodes=fr&accept-language=fr&q=" +
+                        URLEncoder.encode(where, "UTF-8")))
+                val words = what.lowercase().split(Regex("[\\s'’-]+")).filter { it.length > 1 && it !in STOP && it !in TYPES }
+                val rx = words.joinToString(".*") { fold(Regex.escape(it).replace("\\Q", "").replace("\\E", "")) }
+                for (i in 0 until cities.length()) {
+                    val c = cities.getJSONObject(i)
+                    val lat = c.getString("lat").toDouble()
+                    val lon = c.getString("lon").toDouble()
+                    val cname = c.optString("name", where)
+                    val dep = c.optString("display_name").split(",").map { it.trim() }.let { l -> if (l.size >= 3) l[l.size - 3] else "" }
+                    val tag = if (dep.isNotBlank() && dep != cname) "$cname ($dep)" else cname
+                    if (rx.isNotBlank()) {
+                        try {
+                            val oq = "[out:json][timeout:15];nwr[\"name\"~\"$rx\",i](around:12000,$lat,$lon);out center tags 8;"
+                            var txt: String? = null
+                            for (e in listOf("https://overpass-api.de/api/interpreter", "https://overpass.kumi.systems/api/interpreter")) {
+                                try { txt = Http.post(e, "data=" + URLEncoder.encode(oq, "UTF-8"), 20000); break } catch (_: Exception) {}
+                            }
+                            val els = JSONObject(txt ?: "{\"elements\":[]}").getJSONArray("elements")
+                            for (k in 0 until els.length()) {
+                                val e = els.getJSONObject(k)
+                                val tags = e.optJSONObject("tags") ?: continue
+                                val ce = e.optJSONObject("center")
+                                val la = if (e.has("lat")) e.getDouble("lat") else ce?.optDouble("lat", Double.NaN) ?: Double.NaN
+                                val lo = if (e.has("lon")) e.getDouble("lon") else ce?.optDouble("lon", Double.NaN) ?: Double.NaN
+                                if (la.isNaN() || lo.isNaN()) continue
+                                val town = tags.optString("addr:city", "").ifBlank { tag }
+                                named.add(Place(tags.optString("name") + ", " + town, Pt(la, lo)))
+                            }
+                        } catch (_: Exception) {
+                        }
+                    }
+                    // Photon biaisé sur la ville candidate
+                    try {
+                        val feats = JSONObject(Http.get("https://photon.komoot.io/api/?limit=4&lang=fr&lat=$lat&lon=$lon&q=" +
+                            URLEncoder.encode(what, "UTF-8"))).optJSONArray("features") ?: JSONArray()
+                        for (k in 0 until feats.length()) {
+                            val f = feats.getJSONObject(k)
+                            val pr = f.optJSONObject("properties") ?: continue
+                            val co = f.getJSONObject("geometry").getJSONArray("coordinates")
+                            val pt = Pt(co.getDouble(1), co.getDouble(0))
+                            if (Geo.dist(pt, Pt(lat, lon)) > 25000.0) continue
+                            val parts = ArrayList<String>()
+                            for (key in listOf("name", "street", "city", "postcode")) {
+                                val v = pr.optString(key, "")
+                                if (v.isNotBlank() && v !in parts) parts.add(v)
+                            }
+                            if (parts.isNotEmpty()) named.add(Place(parts.joinToString(", "), pt))
+                        }
+                    } catch (_: Exception) {
+                    }
+                }
+            } catch (_: Exception) {
+            }
+        }
+        for (p in named) add(p)
+
         try {
             var url = "https://photon.komoot.io/api/?limit=8&lang=fr&q=" + URLEncoder.encode(q, "UTF-8")
             if (near != null) url += "&lat=${near.lat}&lon=${near.lon}"
