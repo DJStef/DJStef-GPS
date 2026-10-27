@@ -504,7 +504,7 @@ object RadarRepository {
 data class Report(val id: String, val type: String, val pt: Pt, val ts: Long, val conf: Int)
 
 object ReportClient {
-    val TYPES = listOf("Radar mobile", "Contrôle", "Accident", "Danger sur la route")
+    val TYPES = listOf("Radar fixe", "Radar mobile", "Radar feu rouge", "Vitesse moyenne", "Contrôle", "Accident", "Danger")
 
     suspend fun fetch(base: String, around: Pt): List<Report> = withContext(Dispatchers.IO) {
         val url = base.trimEnd('/') + "/reports?lat=${around.lat}&lon=${around.lon}&r=30000"

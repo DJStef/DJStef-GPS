@@ -5,7 +5,7 @@ const JSON_H = {
   "content-type": "application/json",
   "access-control-allow-origin": "*",
 };
-const TYPES = ["Radar mobile", "Contrôle", "Accident", "Danger sur la route"];
+const TYPES = ["Radar fixe", "Radar mobile", "Radar feu rouge", "Vitesse moyenne", "Contrôle", "Accident", "Danger"];
 
 function dist(aLat, aLon, bLat, bLon) {
   const R = 6371000, rad = Math.PI / 180;

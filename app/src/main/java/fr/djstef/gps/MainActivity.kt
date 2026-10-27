@@ -5,10 +5,12 @@ package fr.djstef.gps
 import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
+import android.app.Dialog
 import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.Typeface
+import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.GradientDrawable
 import android.location.Location
 import android.location.LocationListener
@@ -19,6 +21,8 @@ import android.speech.tts.TextToSpeech
 import android.text.InputType
 import android.view.Gravity
 import android.view.View
+import android.view.ViewGroup
+import android.view.Window
 import android.view.WindowManager
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
@@ -53,8 +57,11 @@ import org.maplibre.android.style.layers.CircleLayer
 import org.maplibre.android.style.layers.LineLayer
 import org.maplibre.android.style.layers.Property
 import org.maplibre.android.style.layers.PropertyFactory
+import org.maplibre.android.style.layers.RasterLayer
 import org.maplibre.android.style.layers.SymbolLayer
 import org.maplibre.android.style.sources.GeoJsonSource
+import org.maplibre.android.style.sources.RasterSource
+import org.maplibre.android.style.sources.TileSet
 import org.maplibre.geojson.Feature
 import org.maplibre.geojson.FeatureCollection
 import org.maplibre.geojson.LineString
@@ -68,7 +75,7 @@ import kotlin.math.roundToInt
 class MainActivity : Activity() {
 
     companion object {
-        const val VERSION = "0.2"
+        const val VERSION = "0.3"
         const val STYLE_URL = "https://tiles.openfreemap.org/styles/liberty"
 
         // Palette (même esprit que l'appli IPTV : fond bleu nuit, une couleur par section)
@@ -102,9 +109,12 @@ class MainActivity : Activity() {
     private lateinit var navArrow: TextView
     private lateinit var navDist: TextView
     private lateinit var navStreet: TextView
-    private lateinit var radarBanner: TextView
-    private lateinit var speedView: TextView
-    private lateinit var limitView: TextView
+    private lateinit var radarBox: LinearLayout
+    private lateinit var radarIcon: ImageView
+    private lateinit var radarText: TextView
+    private lateinit var speedView: SpeedBubble
+    private lateinit var limitView: SignView
+    private lateinit var trafficBtn: TextView
     private lateinit var panel: LinearLayout
     private lateinit var etaView: TextView
     private lateinit var subView: TextView
@@ -230,12 +240,11 @@ class MainActivity : Activity() {
         return Color.HSVToColor(hsv)
     }
 
-    private fun gradBg(color: String, radius: Int): GradientDrawable {
-        val c = Color.parseColor(color)
-        val g = GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, intArrayOf(c, darker(c, 0.7f)))
-        g.cornerRadius = dp(radius).toFloat()
-        return g
-    }
+    private fun gradBg(color: String, radius: Int): android.graphics.drawable.Drawable =
+        Gloss.rect(Color.parseColor(color), dp(radius).toFloat(), dp(22))
+
+    private fun glossBtn(color: String): android.graphics.drawable.Drawable =
+        Gloss.rect(Color.parseColor(color), dp(14).toFloat(), dp(18))
 
     private fun label(text: String, size: Float = 15f, bold: Boolean = false, color: String = "#FFFFFF"): TextView {
         val t = TextView(this)
@@ -251,7 +260,7 @@ class MainActivity : Activity() {
         t.gravity = Gravity.CENTER
         t.isSingleLine = true
         t.setPadding(dp(10), dp(13), dp(10), dp(13))
-        t.background = colorBg(color)
+        t.background = glossBtn(color)
         t.setOnClickListener { onClick() }
         return t
     }
@@ -259,7 +268,8 @@ class MainActivity : Activity() {
     private fun circleBtn(text: String, size: Int, onClick: () -> Unit): TextView {
         val t = label(text, 20f, true)
         t.gravity = Gravity.CENTER
-        t.background = ovalBg(NAVY)
+        t.background = Gloss.oval(Color.parseColor("#26324F"))
+        t.elevation = dp(6).toFloat()
         t.layoutParams = LinearLayout.LayoutParams(dp(size), dp(size))
         t.setOnClickListener { onClick() }
         return t
@@ -343,11 +353,17 @@ class MainActivity : Activity() {
         navBanner.addView(navCol, LinearLayout.LayoutParams(0, -2, 1f).also { it.leftMargin = dp(8) })
         topBox.addView(navBanner, LinearLayout.LayoutParams(-1, -2))
 
-        radarBanner = label("", 18f, true)
-        radarBanner.background = gradBg(RED, 16)
-        radarBanner.setPadding(dp(14), dp(12), dp(14), dp(12))
-        radarBanner.visibility = View.GONE
-        topBox.addView(radarBanner, LinearLayout.LayoutParams(-1, -2).also { it.topMargin = dp(8) })
+        radarBox = LinearLayout(this)
+        radarBox.orientation = LinearLayout.HORIZONTAL
+        radarBox.gravity = Gravity.CENTER_VERTICAL
+        radarBox.background = gradBg(RED, 18)
+        radarBox.setPadding(dp(10), dp(8), dp(14), dp(8))
+        radarBox.visibility = View.GONE
+        radarIcon = ImageView(this)
+        radarBox.addView(radarIcon, LinearLayout.LayoutParams(dp(56), dp(56)))
+        radarText = label("", 18f, true)
+        radarBox.addView(radarText, LinearLayout.LayoutParams(0, -2, 1f).also { it.leftMargin = dp(10) })
+        topBox.addView(radarBox, LinearLayout.LayoutParams(-1, -2).also { it.topMargin = dp(8) })
 
         root.addView(topBox, FrameLayout.LayoutParams(-1, -2, Gravity.TOP))
 
@@ -358,7 +374,8 @@ class MainActivity : Activity() {
         val repBtn = circleBtn("⚠", 52) { reportDialog() }
         muteBtn = circleBtn("🔊", 52) { toggleMute() }
         viewBtn = circleBtn("3D", 52) { toggleView() }
-        for (b in listOf(recBtn, repBtn, muteBtn, viewBtn)) {
+        trafficBtn = circleBtn("🚦", 52) { toggleTraffic() }
+        for (b in listOf(recBtn, repBtn, trafficBtn, muteBtn, viewBtn)) {
             (b.layoutParams as LinearLayout.LayoutParams).topMargin = dp(10)
             side.addView(b)
         }
@@ -375,19 +392,11 @@ class MainActivity : Activity() {
         val infoRow = LinearLayout(this)
         infoRow.orientation = LinearLayout.HORIZONTAL
         infoRow.gravity = Gravity.BOTTOM
-        speedView = label("0\nkm/h", 18f, true)
-        speedView.gravity = Gravity.CENTER
-        speedView.background = ovalBg(NAVY)
-        infoRow.addView(speedView, LinearLayout.LayoutParams(dp(76), dp(76)))
-        limitView = label("", 24f, true, "#111111")
-        limitView.gravity = Gravity.CENTER
-        val lg = GradientDrawable()
-        lg.shape = GradientDrawable.OVAL
-        lg.setColor(Color.WHITE)
-        lg.setStroke(dp(6), Color.parseColor("#D32F2F"))
-        limitView.background = lg
+        speedView = SpeedBubble(this)
+        infoRow.addView(speedView, LinearLayout.LayoutParams(dp(92), dp(92)))
+        limitView = SignView(this)
         limitView.visibility = View.GONE
-        infoRow.addView(limitView, LinearLayout.LayoutParams(dp(64), dp(64)).also { it.leftMargin = dp(10) })
+        infoRow.addView(limitView, LinearLayout.LayoutParams(dp(84), dp(84)).also { it.leftMargin = dp(8) })
         bottomBox.addView(infoRow, LinearLayout.LayoutParams(-1, -2).also { it.bottomMargin = dp(8) })
 
         panel = LinearLayout(this)
@@ -456,7 +465,7 @@ class MainActivity : Activity() {
 
     private fun updateModeButtons() {
         for ((k, b) in modeBtns) {
-            b.background = colorBg(if (k == mode) ORANGE_L else GREY)
+            b.background = glossBtn(if (k == mode) ORANGE_L else GREY)
             b.setTextColor(Color.parseColor(if (k == mode) "#0B1220" else "#FFFFFF"))
         }
     }
@@ -467,7 +476,8 @@ class MainActivity : Activity() {
         modeRow.visibility = if (navigating) View.GONE else View.VISIBLE
         cancelBtn.visibility = if (navigating) View.GONE else View.VISIBLE
         startBtn.text = if (navigating) "Arrêter" else "Démarrer"
-        startBtn.background = colorBg(if (navigating) RED else GREEN)
+        startBtn.background = glossBtn(if (navigating) RED else GREEN)
+        trafficBtn.alpha = if (prefs.bool("traffic", false)) 1f else 0.55f
         searchRow.visibility = if (navigating) View.GONE else View.VISIBLE
         navBanner.visibility = if (navigating) View.VISIBLE else View.GONE
         muteBtn.visibility = if (navigating) View.VISIBLE else View.GONE
@@ -504,20 +514,29 @@ class MainActivity : Activity() {
                 PropertyFactory.lineJoin(Property.LINE_JOIN_ROUND)
             )
         )
+        for (t in RadarArt.TYPES) st.addImage("ic-$t", RadarArt.bitmap(t, 128))
         st.addLayer(
             CircleLayer("radar-layer", "radars").withProperties(
-                PropertyFactory.circleRadius(6f),
+                PropertyFactory.circleRadius(5f),
                 PropertyFactory.circleColor("#E53935"),
                 PropertyFactory.circleStrokeColor("#FFFFFF"),
                 PropertyFactory.circleStrokeWidth(1.5f)
-            )
+            ).also { it.setMaxZoom(11f) }
         )
         st.addLayer(
-            CircleLayer("report-layer", "reports").withProperties(
-                PropertyFactory.circleRadius(9f),
-                PropertyFactory.circleColor("#FFD600"),
-                PropertyFactory.circleStrokeColor("#000000"),
-                PropertyFactory.circleStrokeWidth(2f)
+            SymbolLayer("radar-sym", "radars").withProperties(
+                PropertyFactory.iconImage(Expression.get("icon")),
+                PropertyFactory.iconSize(0.8f),
+                PropertyFactory.iconAllowOverlap(true),
+                PropertyFactory.iconIgnorePlacement(true)
+            ).also { it.setMinZoom(11f) }
+        )
+        st.addLayer(
+            SymbolLayer("report-layer", "reports").withProperties(
+                PropertyFactory.iconImage(Expression.get("icon")),
+                PropertyFactory.iconSize(1.1f),
+                PropertyFactory.iconAllowOverlap(true),
+                PropertyFactory.iconIgnorePlacement(true)
             )
         )
         st.addLayer(
@@ -536,6 +555,7 @@ class MainActivity : Activity() {
         )
         applyCar()
         applyRadarVisibility()
+        setupTraffic()
 
         m.addOnMapLongClickListener { ll ->
             setDestination(Pt(ll.latitude, ll.longitude), "Point choisi sur la carte")
@@ -595,13 +615,18 @@ class MainActivity : Activity() {
     private fun applyRadarVisibility() {
         val vis = if (prefs.bool("showFixed", true)) Property.VISIBLE else Property.NONE
         style?.getLayerAs<CircleLayer>("radar-layer")?.setProperties(PropertyFactory.visibility(vis))
+        style?.getLayerAs<SymbolLayer>("radar-sym")?.setProperties(PropertyFactory.visibility(vis))
     }
 
     private fun point(p: Pt) = Feature.fromGeometry(Point.fromLngLat(p.lon, p.lat))
 
     private fun refreshRadarLayer() {
         val src = style?.getSourceAs<GeoJsonSource>("radars") ?: return
-        src.setGeoJson(FeatureCollection.fromFeatures(fixedRadars.map { point(it.pt) }))
+        src.setGeoJson(FeatureCollection.fromFeatures(fixedRadars.map {
+            val f = point(it.pt)
+            f.addStringProperty("icon", "ic-" + RadarArt.key(it.kind))
+            f
+        }))
     }
 
     private fun allReports(): List<Report> {
@@ -612,7 +637,11 @@ class MainActivity : Activity() {
 
     private fun refreshReportLayer() {
         val src = style?.getSourceAs<GeoJsonSource>("reports") ?: return
-        src.setGeoJson(FeatureCollection.fromFeatures(allReports().map { point(it.pt) }))
+        src.setGeoJson(FeatureCollection.fromFeatures(allReports().map {
+            val f = point(it.pt)
+            f.addStringProperty("icon", "ic-" + RadarArt.key(it.type))
+            f
+        }))
     }
 
     private fun updateMeLayer(loc: Location) {
@@ -681,11 +710,10 @@ class MainActivity : Activity() {
         updateMeLayer(loc)
         if (follow) moveCamera(loc)
         val kmh = if (loc.hasSpeed()) (loc.speed * 3.6f).roundToInt() else 0
-        speedView.text = "$kmh\nkm/h"
         updateLimit(loc)
         val lim = limitNow
         val over = lim != null && kmh > lim + 3
-        speedView.background = ovalBg(if (over) "#D32F2F" else NAVY)
+        speedView.set(kmh, over)
         val now = System.currentTimeMillis()
         if (over && lim != null && prefs.bool("speedAlert", true) && now - lastSpeedWarn > 25000) {
             lastSpeedWarn = now
@@ -725,7 +753,7 @@ class MainActivity : Activity() {
     private fun refreshLimitView() {
         val l = limitNow
         if (l != null && prefs.bool("showLimit", true)) {
-            limitView.text = "$l"
+            limitView.value = l
             limitView.visibility = View.VISIBLE
         } else {
             limitView.visibility = View.GONE
@@ -1085,12 +1113,13 @@ class MainActivity : Activity() {
         }
         val b = best
         if (b == null) {
-            radarBanner.visibility = View.GONE
+            radarBox.visibility = View.GONE
             return
         }
         val lim = if (b.limit != null) " · limité à ${b.limit}" else ""
-        radarBanner.text = "⚠ ${b.kind} dans ${bestD.roundToInt()} m$lim"
-        radarBanner.visibility = View.VISIBLE
+        radarText.text = "${b.kind} dans ${bestD.roundToInt()} m$lim"
+        radarIcon.setImageBitmap(RadarArt.bitmap(RadarArt.key(b.kind), 128))
+        radarBox.visibility = View.VISIBLE
         if (b.id !in alerted) {
             alerted.add(b.id)
             if (prefs.bool("radarAlert", true)) {
@@ -1110,30 +1139,148 @@ class MainActivity : Activity() {
             toast("Position GPS en attente...")
             return
         }
-        AlertDialog.Builder(this)
-            .setTitle("Signaler ici")
-            .setItems(ReportClient.TYPES.toTypedArray()) { _, i ->
-                val type = ReportClient.TYPES[i]
-                val at = Pt(l.latitude, l.longitude)
-                val id = "loc${System.currentTimeMillis()}"
-                localReports.add(Report(id, type, at, System.currentTimeMillis(), 1) to System.currentTimeMillis() + 4 * 3600 * 1000L)
-                refreshReportLayer()
-                val s = serverUrl()
-                if (s.isBlank()) {
-                    toast("Signalement enregistré sur ce téléphone (serveur non configuré)")
-                } else {
-                    scope.launch {
-                        try {
-                            ReportClient.send(s, type, at)
-                            toast("Signalement envoyé, merci !")
-                        } catch (e: Exception) {
-                            toast("Envoi impossible : ${e.message}")
-                        }
-                    }
+        val dlg = Dialog(this)
+        dlg.requestWindowFeature(Window.FEATURE_NO_TITLE)
+        val box = LinearLayout(this)
+        box.orientation = LinearLayout.VERTICAL
+        box.background = colorBg("#F2101828", 22)
+        box.setPadding(dp(12), dp(14), dp(12), dp(12))
+        box.addView(label("Signaler ici", 20f, true))
+        val types = ReportClient.TYPES
+        var i = 0
+        while (i < types.size) {
+            val row = LinearLayout(this)
+            row.orientation = LinearLayout.HORIZONTAL
+            for (k in i until minOf(i + 3, types.size)) {
+                val type = types[k]
+                val cell = LinearLayout(this)
+                cell.orientation = LinearLayout.VERTICAL
+                cell.gravity = Gravity.CENTER
+                cell.setPadding(dp(4), dp(8), dp(4), dp(8))
+                cell.background = colorBg(CARD, 14)
+                val iv = ImageView(this)
+                iv.setImageBitmap(RadarArt.bitmap(RadarArt.key(type), 128))
+                cell.addView(iv, LinearLayout.LayoutParams(dp(64), dp(64)))
+                val t = label(type, 12f, true)
+                t.gravity = Gravity.CENTER
+                cell.addView(t)
+                cell.setOnClickListener {
+                    dlg.dismiss()
+                    sendReport(type, l)
+                }
+                row.addView(cell, LinearLayout.LayoutParams(0, -2, 1f).also { it.setMargins(dp(4), dp(4), dp(4), dp(4)) })
+            }
+            for (k in 0 until (i + 3 - types.size).coerceAtLeast(0)) row.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f))
+            box.addView(row, LinearLayout.LayoutParams(-1, -2))
+            i += 3
+        }
+        val cancel = button("Annuler", GREY) { dlg.dismiss() }
+        box.addView(cancel, LinearLayout.LayoutParams(-1, -2).also { it.topMargin = dp(8) })
+        dlg.setContentView(box)
+        dlg.window?.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+        dlg.window?.setLayout((resources.displayMetrics.widthPixels * 0.94f).toInt(), ViewGroup.LayoutParams.WRAP_CONTENT)
+        dlg.show()
+    }
+
+    private fun sendReport(type: String, l: Location) {
+        val at = Pt(l.latitude, l.longitude)
+        val id = "loc${System.currentTimeMillis()}"
+        localReports.add(Report(id, type, at, System.currentTimeMillis(), 1) to System.currentTimeMillis() + 4 * 3600 * 1000L)
+        refreshReportLayer()
+        val s = serverUrl()
+        if (s.isBlank()) {
+            toast("Signalement enregistré sur ce téléphone (serveur non configuré)")
+        } else {
+            scope.launch {
+                try {
+                    ReportClient.send(s, type, at)
+                    toast("Signalement envoyé, merci !")
+                } catch (e: Exception) {
+                    toast("Envoi impossible : ${e.message}")
                 }
             }
-            .setNegativeButton("Annuler", null)
-            .show()
+        }
+    }
+
+    private fun enlargeCar(model: Int, col: Int) {
+        val dlg = Dialog(this, android.R.style.Theme_Black_NoTitleBar_Fullscreen)
+        val box = LinearLayout(this)
+        box.orientation = LinearLayout.VERTICAL
+        box.gravity = Gravity.CENTER
+        box.setBackgroundColor(Color.parseColor(BG))
+        val rear = ImageView(this)
+        rear.setImageBitmap(CarSprites.drawRear(model, col))
+        rear.scaleType = ImageView.ScaleType.FIT_CENTER
+        val top = ImageView(this)
+        top.setImageBitmap(CarSprites.draw(model, col))
+        top.scaleType = ImageView.ScaleType.FIT_CENTER
+        box.addView(label(CarSprites.NAMES[model], 22f, true))
+        box.addView(rear, LinearLayout.LayoutParams(-1, 0, 1f))
+        box.addView(top, LinearLayout.LayoutParams(-1, 0, 1.3f))
+        box.addView(label("Touche pour fermer", 12f, false, "#9AA3B5"))
+        box.setOnClickListener { dlg.dismiss() }
+        dlg.setContentView(box)
+        dlg.show()
+    }
+
+    // ---------- Trafic temps réel (TomTom) ----------
+
+    private fun setupTraffic() {
+        val st = style ?: return
+        val key = prefs.str("tomtomKey", "")
+        if (key.isBlank()) return
+        try {
+            if (st.getSource("traffic") == null) {
+                val ts = TileSet("2.2.0", "https://api.tomtom.com/traffic/map/4/tile/flow/relative0/{z}/{x}/{y}.png?key=$key")
+                ts.setMaxZoom(18f)
+                st.addSource(RasterSource("traffic", ts, 256))
+                st.addLayerBelow(
+                    RasterLayer("traffic-layer", "traffic").withProperties(PropertyFactory.rasterOpacity(0.85f)),
+                    "route-layer"
+                )
+            }
+            val vis = if (prefs.bool("traffic", false)) Property.VISIBLE else Property.NONE
+            st.getLayerAs<RasterLayer>("traffic-layer")?.setProperties(PropertyFactory.visibility(vis))
+        } catch (e: Exception) {
+            toast("Trafic indisponible : ${e.message}")
+        }
+    }
+
+    private fun toggleTraffic() {
+        if (prefs.str("tomtomKey", "").isBlank()) {
+            toast("Ajoute d'abord ta clé TomTom gratuite (☰ → Trafic)")
+            showMenu("traffic")
+            return
+        }
+        prefs.setBool("traffic", !prefs.bool("traffic", false))
+        setupTraffic()
+        refreshPanel()
+    }
+
+    private fun trafficPage(content: LinearLayout) {
+        val c = card(content)
+        sectionTitle(c, "TRAFIC EN TEMPS RÉEL", "#4DB6AC")
+        switchRow(c, "Afficher le trafic", "Vert fluide, orange ralenti, rouge bouchon", "traffic", false) { setupTraffic(); refreshPanel() }
+        val c2 = card(content)
+        sectionTitle(c2, "CLÉ TOMTOM (GRATUITE)", "#4DB6AC")
+        c2.addView(label("Crée un compte gratuit sur developer.tomtom.com (sans carte bancaire), puis copie ta clé API ici. Le palier gratuit couvre l'usage perso.", 12f, false, "#9AA3B5"))
+        val et = EditText(this)
+        et.setText(prefs.str("tomtomKey", ""))
+        et.hint = "Clé API TomTom"
+        et.setHintTextColor(Color.parseColor("#6B7385"))
+        et.setTextColor(Color.WHITE)
+        et.setSingleLine(true)
+        c2.addView(et)
+        c2.addView(button("Enregistrer", "#00897B") {
+            val st = style
+            if (st != null) {
+                st.getLayer("traffic-layer")?.let { st.removeLayer(it) }
+                st.getSource("traffic")?.let { st.removeSource(it) }
+            }
+            prefs.setStr("tomtomKey", et.text.toString().trim())
+            setupTraffic()
+            toast("Clé enregistrée")
+        }, LinearLayout.LayoutParams(-1, -2).also { it.topMargin = dp(8) })
     }
 
     private fun startPolling() {
@@ -1167,6 +1314,7 @@ class MainActivity : Activity() {
         "vehicle" -> ORANGE
         "route" -> BLUE
         "radar" -> RED
+        "traffic" -> "#00897B"
         "guide" -> SLATE
         else -> ORANGE_L
     }
@@ -1176,6 +1324,7 @@ class MainActivity : Activity() {
         "vehicle" -> "Véhicule"
         "route" -> "Itinéraire"
         "radar" -> "Radars"
+        "traffic" -> "Trafic"
         "guide" -> "Guidage"
         "about" -> "À propos"
         else -> "DJSTEF GPS"
@@ -1221,6 +1370,7 @@ class MainActivity : Activity() {
             "vehicle" -> vehiclePage(content)
             "route" -> routePage(content)
             "radar" -> radarPage(content)
+            "traffic" -> trafficPage(content)
             "guide" -> guidePage(content)
             else -> aboutPage(content)
         }
@@ -1247,6 +1397,7 @@ class MainActivity : Activity() {
             arrayOf("vehicle", "🚗", "Véhicule", "Modèle 3D, couleur, taille", ORANGE),
             arrayOf("route", "🛣", "Itinéraire", "Péages, autoroutes, ferries", BLUE),
             arrayOf("radar", "📡", "Radars", "Alertes, éviter, signalements", RED),
+            arrayOf("traffic", "🚦", "Trafic", "Temps réel (TomTom)", "#00897B"),
             arrayOf("guide", "🔊", "Guidage", "Voix, vitesse, vue 3D", SLATE),
             arrayOf("about", "ℹ", "À propos", "Version et sources", GREY)
         )
@@ -1356,7 +1507,8 @@ class MainActivity : Activity() {
         prev.addView(rear, LinearLayout.LayoutParams(0, dp(110), 1f))
         prev.addView(top, LinearLayout.LayoutParams(0, dp(110), 1f))
         c.addView(prev)
-        c.addView(label("Vue 3D de derrière en navigation · vue du dessus en 2D", 12f, false, "#9AA3B5"))
+        prev.setOnClickListener { enlargeCar(model, col) }
+        c.addView(label("Touche l'aperçu pour l'agrandir · vue 3D de derrière en navigation, du dessus en 2D", 12f, false, "#9AA3B5"))
 
         val c2 = card(content)
         sectionTitle(c2, "MODÈLE", ORANGE_L)
@@ -1415,8 +1567,8 @@ class MainActivity : Activity() {
         val sizeLbl = label(String.format(Locale.FRANCE, "×%.1f", size), 16f, true)
         c4.addView(sizeLbl)
         val sb = SeekBar(this)
-        sb.max = 150
-        sb.progress = ((size - 0.5f) * 100).roundToInt().coerceIn(0, 150)
+        sb.max = 250
+        sb.progress = ((size - 0.5f) * 100).roundToInt().coerceIn(0, 250)
         sb.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(s: SeekBar?, p: Int, fromUser: Boolean) {
                 val v = 0.5f + p / 100f
@@ -1484,7 +1636,7 @@ class MainActivity : Activity() {
     private fun aboutPage(content: LinearLayout) {
         val c = card(content)
         c.addView(label("DJSTEF GPS · v$VERSION", 18f, true))
-        c.addView(label("Carte : OpenStreetMap et OpenFreeMap\nItinéraires : Valhalla / OSRM (OpenStreetMap)\nRadars fixes : data.gouv.fr (Licence Ouverte 2.0)\nLimitations de vitesse : OpenStreetMap (Overpass)\nAdresses : Nominatim", 13f, false, "#C0C7D6"))
+        c.addView(label("Carte : OpenStreetMap et OpenFreeMap\nItinéraires : Valhalla / OSRM (OpenStreetMap)\nRadars fixes : data.gouv.fr (Licence Ouverte 2.0)\nTrafic : TomTom\nLimitations de vitesse : OpenStreetMap (Overpass)\nAdresses : Nominatim", 13f, false, "#C0C7D6"))
         val c2 = card(content)
         c2.addView(label("Les limitations de vitesse et les radars peuvent être incomplets ou périmés : respecte toujours la signalisation sur la route.", 13f, false, "#9AA3B5"))
     }
