@@ -76,7 +76,7 @@ import kotlin.math.roundToInt
 class MainActivity : Activity() {
 
     companion object {
-        const val VERSION = "0.22"
+        const val VERSION = "0.23"
         const val STYLE_URL = "https://tiles.openfreemap.org/styles/liberty"
         const val STYLE_DARK = "https://tiles.openfreemap.org/styles/dark"
 
@@ -627,7 +627,9 @@ class MainActivity : Activity() {
 
     private fun applyMapBottom() {
         val lp = mapView.layoutParams as FrameLayout.LayoutParams
-        val want = if (navigating) bottomH else 0
+        // Vitesse et limite flottent sur la carte, à gauche, au-dessus du bandeau : la carte s'arrête sous elles
+        val over = if (navigating && ::infoRow.isInitialized && infoRow.height > 0) infoRow.height + dp(8) else 0
+        val want = if (navigating) (bottomH - over).coerceAtLeast(0) else 0
         if (lp.bottomMargin != want) {
             lp.bottomMargin = want
             mapView.layoutParams = lp
@@ -655,19 +657,7 @@ class MainActivity : Activity() {
     private fun refreshPanel() {
         panel.visibility = if (route != null && !navigating) View.VISIBLE else View.GONE
         navBand.visibility = if (navigating) View.VISIBLE else View.GONE
-        infoRow.visibility = if (navigating) View.GONE else View.VISIBLE
-        val host = if (navigating) navBand else infoRow
-        if (speedView.parent !== host) {
-            (speedView.parent as? android.view.ViewGroup)?.removeView(speedView)
-            (limitView.parent as? android.view.ViewGroup)?.removeView(limitView)
-            if (navigating) {
-                navBand.addView(speedView, 0, LinearLayout.LayoutParams(dp(66), dp(66)))
-                navBand.addView(limitView, 1, LinearLayout.LayoutParams(dp(58), dp(58)).also { it.leftMargin = dp(6) })
-            } else {
-                infoRow.addView(speedView, 0, LinearLayout.LayoutParams(dp(92), dp(92)))
-                infoRow.addView(limitView, 1, LinearLayout.LayoutParams(dp(84), dp(84)).also { it.leftMargin = dp(8) })
-            }
-        }
+        infoRow.visibility = View.VISIBLE
         navDestV.text = destName.substringBefore(",")
         applyBottomMargins()
         modeRow.visibility = if (navigating) View.GONE else View.VISIBLE
