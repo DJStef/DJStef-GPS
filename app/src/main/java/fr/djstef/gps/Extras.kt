@@ -191,10 +191,10 @@ object PoiArt {
 object Lufop {
     const val CREDIT = "Données : Lufop.net et contributeurs OpenStreetMap — ODbL 1.0"
 
-    /** Radars autour d'un point (marge m≈10 par km, boîte englobante). Plan gratuit : 200 requêtes/jour. */
+    /** Radars autour d'un point (m=10 ≈ 1 km ; ici m=300 ≈ 30 km). Plan gratuit : 200 requêtes/jour. */
     suspend fun around(key: String, p: Pt): List<Radar> = withContext(Dispatchers.IO) {
         val url = "https://api.lufop.net/api?key=${URLEncoder.encode(key, "UTF-8")}&format=json&pays=fr" +
-            "&q=${p.lat},${p.lon}&m=80&nbr=200"
+            "&q=${p.lat},${p.lon}&m=300&nbr=200"
         val txt = Http.get(url, 20000).trim()
         if (txt.startsWith("{")) {
             val o = JSONObject(txt)

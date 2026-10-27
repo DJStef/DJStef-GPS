@@ -76,7 +76,7 @@ import kotlin.math.roundToInt
 class MainActivity : Activity() {
 
     companion object {
-        const val VERSION = "0.9"
+        const val VERSION = "0.10"
         const val STYLE_URL = "https://tiles.openfreemap.org/styles/liberty"
 
         // Palette (même esprit que l'appli IPTV : fond bleu nuit, une couleur par section)
@@ -1173,7 +1173,7 @@ class MainActivity : Activity() {
         if (now - lufopLastTry < 120000) return
         val p = Pt(loc.latitude, loc.longitude)
         val c = lufopCenter
-        if (c != null && Geo.dist(c, p) < 4000.0) return
+        if (c != null && Geo.dist(c, p) < 8000.0) return
         if (!lufopQuotaOk()) return
         lufopBusy = true
         lufopLastTry = now
@@ -1190,7 +1190,7 @@ class MainActivity : Activity() {
                     if (r.kind == "Radar fixe" && baseRadars.any { Math.abs(it.pt.lat - r.pt.lat) < 0.0006 && Math.abs(it.pt.lon - r.pt.lon) < 0.0009 }) continue
                     lufopMap[r.id] = r
                 }
-                lufopMap.entries.removeAll { Geo.dist(p, it.value.pt) > 30000.0 }
+                lufopMap.entries.removeAll { Geo.dist(p, it.value.pt) > 45000.0 }
                 fixedRadars = baseRadars + lufopMap.values
                 refreshRadarLayer()
             } catch (e: Exception) {
