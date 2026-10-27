@@ -75,7 +75,7 @@ import kotlin.math.roundToInt
 class MainActivity : Activity() {
 
     companion object {
-        const val VERSION = "0.5"
+        const val VERSION = "0.6"
         const val STYLE_URL = "https://tiles.openfreemap.org/styles/liberty"
 
         // Palette (même esprit que l'appli IPTV : fond bleu nuit, une couleur par section)
@@ -162,6 +162,7 @@ class MainActivity : Activity() {
     private var lastSpeedWarn = 0L
 
     private var menuView: View? = null
+    private var autoStart = false
     private lateinit var trips: TripStore
     private var tripStart = 0L
     private var tripDist = 0.0
@@ -181,6 +182,13 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
         prefs = AppPrefs(this)
         trips = TripStore(this)
+        NavBridge.go = { pl ->
+            runOnUiThread {
+                autoStart = true
+                goTo(pl)
+            }
+        }
+        NavBridge.stop = { runOnUiThread { stopNavigation() } }
         MapLibre.getInstance(this)
         tts = TextToSpeech(this) {
             if (it == TextToSpeech.SUCCESS) {
@@ -722,6 +730,10 @@ class MainActivity : Activity() {
         val lim = limitNow
         val over = lim != null && kmh > lim + 3
         speedView.set(kmh, over)
+        NavBridge.me = loc
+        NavBridge.speed = kmh
+        NavBridge.limit = if (prefs.bool("showLimit", true)) lim else null
+        NavBridge.over = over
         val now = System.currentTimeMillis()
         if (over && lim != null && prefs.bool("speedAlert", true) && now - lastSpeedWarn > 25000) {
             lastSpeedWarn = now
@@ -732,6 +744,7 @@ class MainActivity : Activity() {
             recordTrip(loc, kmh)
             navUpdate(loc)
         }
+        NavBridge.changed()
     }
 
     // ---------- Limitations de vitesse ----------
@@ -930,6 +943,7 @@ class MainActivity : Activity() {
                     }
                 }
                 route = r
+                if (navigating) NavBridge.route = r
                 stepIdx = 0
                 farSaid = -1
                 nearSaid = -1
@@ -953,7 +967,12 @@ class MainActivity : Activity() {
                 } else {
                     navDist.text = "Itinéraire recalculé"
                 }
+                if (!keepNav && autoStart) {
+                    autoStart = false
+                    startNavigation()
+                }
             } catch (e: Exception) {
+                autoStart = false
                 toast("Itinéraire impossible : ${e.message}")
             } finally {
                 rerouting = false
@@ -1005,6 +1024,15 @@ class MainActivity : Activity() {
     private fun startNavigation() {
         val r = route ?: return
         navigating = true
+        NavBridge.navigating = true
+        NavBridge.route = r
+        NavBridge.destName = destName
+        NavBridge.nextKind = r.steps.firstOrNull()?.kind ?: 1
+        NavBridge.nextText = r.steps.firstOrNull()?.text ?: ""
+        NavBridge.nextName = r.steps.firstOrNull()?.name ?: ""
+        NavBridge.nextDist = 0.0
+        NavBridge.remainDist = r.dist
+        NavBridge.remainSec = r.dur
         tripStart = System.currentTimeMillis()
         tripDist = 0.0
         tripMax = 0
@@ -1031,6 +1059,9 @@ class MainActivity : Activity() {
     private fun stopNavigation() {
         if (!navigating) return
         navigating = false
+        NavBridge.navigating = false
+        NavBridge.route = null
+        NavBridge.changed()
         saveTrip()
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         map?.setPadding(0, 0, 0, 0)
@@ -1087,6 +1118,12 @@ class MainActivity : Activity() {
         navStreet.text = next.text
         etaView.text = "Arrivée ${eta(remTime)}"
         subView.text = summary(remTime, remain)
+        NavBridge.nextKind = next.kind
+        NavBridge.nextText = next.text
+        NavBridge.nextName = next.name
+        NavBridge.nextDist = dNext
+        NavBridge.remainDist = remain
+        NavBridge.remainSec = remTime
 
         val far = if (loc.speed > 16f) 600.0 else if (loc.speed > 8f) 350.0 else 150.0
         if (dNext < 60.0 && nearSaid != stepIdx) {
@@ -1131,10 +1168,13 @@ class MainActivity : Activity() {
         val b = best
         if (b == null) {
             radarBox.visibility = View.GONE
+            NavBridge.radarText = null
             return
         }
         val lim = if (b.limit != null) " · limité à ${b.limit}" else ""
         radarText.text = "${b.kind} dans ${bestD.roundToInt()} m$lim"
+        NavBridge.radarText = radarText.text.toString()
+        NavBridge.radarType = b.kind
         radarIcon.setImageBitmap(RadarArt.bitmap(RadarArt.key(b.kind), 128))
         radarBox.visibility = View.VISIBLE
         if (b.id !in alerted) {
