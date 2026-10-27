@@ -76,7 +76,7 @@ import kotlin.math.roundToInt
 class MainActivity : Activity() {
 
     companion object {
-        const val VERSION = "0.24"
+        const val VERSION = "0.25"
         const val STYLE_URL = "https://tiles.openfreemap.org/styles/liberty"
         const val STYLE_DARK = "https://tiles.openfreemap.org/styles/dark"
 
@@ -500,13 +500,13 @@ class MainActivity : Activity() {
         bottomBox.orientation = LinearLayout.VERTICAL
 
         infoRow = LinearLayout(this)
-        infoRow.orientation = LinearLayout.HORIZONTAL
-        infoRow.gravity = Gravity.BOTTOM
+        infoRow.orientation = LinearLayout.VERTICAL
+        infoRow.gravity = Gravity.BOTTOM or Gravity.START
         speedView = SpeedBubble(this)
-        infoRow.addView(speedView, LinearLayout.LayoutParams(dp(92), dp(92)))
         limitView = SignView(this)
         limitView.visibility = View.GONE
-        infoRow.addView(limitView, LinearLayout.LayoutParams(dp(84), dp(84)).also { it.leftMargin = dp(8) })
+        infoRow.addView(limitView, LinearLayout.LayoutParams(dp(62), dp(62)).also { it.leftMargin = dp(15); it.bottomMargin = dp(2) })
+        infoRow.addView(speedView, LinearLayout.LayoutParams(dp(92), dp(92)))
         bottomBox.addView(infoRow, LinearLayout.LayoutParams(-1, -2).also { it.bottomMargin = dp(8) })
 
         panel = LinearLayout(this)
