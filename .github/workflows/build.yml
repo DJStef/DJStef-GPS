@@ -56,7 +56,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "build-${{ github.run_number }}" "DJStef-GPS-v$VER.apk" \
+          TAG=$(printf 'v%04d' "${{ github.run_number }}")
+          gh release create "$TAG" "DJStef-GPS-v$VER.apk" \
             --title "DJStef GPS v$VER - build ${{ github.run_number }}" \
             --notes "APK signé, installable par-dessus la version précédente." \
             --latest
