@@ -175,8 +175,16 @@ object Geocoder {
         val ws = q.split(Regex("\\s+"))
         // Sans séparateur : « camping les peupliers colombier » → dernier mot = ville si le premier est un type de lieu
         val implicit = m == null && ws.size >= 3 && ws[0].lowercase() in TYPES
-        val what = if (implicit) ws.dropLast(1).joinToString(" ") else m?.groupValues?.get(1)?.trim()
-        val where = if (implicit) ws.last() else m?.groupValues?.get(2)?.trim()
+        var what = if (implicit) ws.dropLast(1).joinToString(" ") else m?.groupValues?.get(1)?.trim()
+        var where = if (implicit) ws.last() else m?.groupValues?.get(2)?.trim()
+        if (implicit) {
+            // Le dernier mot n'est une ville que si Nominatim le reconnaît comme localité (sinon : « les peupliers »)
+            val isCity = try {
+                JSONArray(Http.get("https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&countrycodes=fr&featuretype=settlement&q=" +
+                    URLEncoder.encode(where!!, "UTF-8"))).length() > 0
+            } catch (_: Exception) { false }
+            if (!isCity) { what = null; where = null }
+        }
 
         fun nameWords(t: String): String = t.lowercase().split(Regex("[\\s'’-]+"))
             .filter { it.length > 1 && it !in STOP && it !in TYPES }.joinToString(" ")
