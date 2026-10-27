@@ -76,7 +76,7 @@ import kotlin.math.roundToInt
 class MainActivity : Activity() {
 
     companion object {
-        const val VERSION = "0.12"
+        const val VERSION = "0.13"
         const val STYLE_URL = "https://tiles.openfreemap.org/styles/liberty"
 
         // Palette (même esprit que l'appli IPTV : fond bleu nuit, une couleur par section)
@@ -106,6 +106,15 @@ class MainActivity : Activity() {
     private lateinit var searchRow: LinearLayout
     private lateinit var searchBox: EditText
     private lateinit var resultsBox: LinearLayout
+    private var sideBox: View? = null
+
+    /** Affiche/masque la liste de résultats et dégage le bas et le côté de l'écran pendant qu'elle est ouverte. */
+    private fun setResults(show: Boolean) {
+        resultsBox.visibility = if (show) View.VISIBLE else View.GONE
+        val v = if (show) View.INVISIBLE else View.VISIBLE
+        if (::bottomBox.isInitialized) bottomBox.visibility = v
+        sideBox?.visibility = v
+    }
     private lateinit var navBanner: LinearLayout
     private lateinit var navArrow: TextView
     private lateinit var navDist: TextView
@@ -236,7 +245,7 @@ class MainActivity : Activity() {
     override fun onBackPressed() {
         when {
             menuView != null -> if (menuPage != null) showMenu(null) else closeMenu()
-            resultsBox.visibility == View.VISIBLE -> resultsBox.visibility = View.GONE
+            resultsBox.visibility == View.VISIBLE -> setResults(false)
             navigating -> stopNavigation()
             route != null -> clearRoute()
             else -> super.onBackPressed()
@@ -351,7 +360,12 @@ class MainActivity : Activity() {
         searchRow.addView(menuBtn)
         topBox.addView(searchRow, LinearLayout.LayoutParams(-1, -2))
 
-        val resScroll = ScrollView(this)
+        val resScroll = object : ScrollView(this) {
+            // La liste ne dépasse jamais 55 % de l'écran, pour rester lisible au-dessus de la carte
+            override fun onMeasure(w: Int, h: Int) {
+                super.onMeasure(w, View.MeasureSpec.makeMeasureSpec((resources.displayMetrics.heightPixels * 0.55).toInt(), View.MeasureSpec.AT_MOST))
+            }
+        }
         resultsBox = LinearLayout(this)
         resultsBox.orientation = LinearLayout.VERTICAL
         resultsBox.background = colorBg(NAVY, 16)
@@ -410,6 +424,7 @@ class MainActivity : Activity() {
         val sideLp = FrameLayout.LayoutParams(-2, -2, Gravity.END or Gravity.CENTER_VERTICAL)
         sideLp.rightMargin = dp(10)
         root.addView(side, sideLp)
+        sideBox = side
 
         // --- Bas : vitesse, limite, panneau d'itinéraire ---
         bottomBox = LinearLayout(this)
@@ -828,11 +843,11 @@ class MainActivity : Activity() {
         favRow("home", "🏠", "Domicile")
         favRow("work", "💼", "Travail")
         for (r in prefs.recents()) addRow("🕘 ${r.name}", { goTo(r) })
-        resultsBox.visibility = View.VISIBLE
+        setResults(true)
     }
 
     private fun goTo(p: Place) {
-        resultsBox.visibility = View.GONE
+        setResults(false)
         hideKeyboard()
         searchBox.setText(p.name)
         setDestination(p.pt, p.name)
@@ -861,7 +876,7 @@ class MainActivity : Activity() {
                         goTo(place)
                     })
                 }
-                resultsBox.visibility = View.VISIBLE
+                setResults(true)
             } catch (e: Exception) {
                 toast("Recherche impossible : ${e.message}")
             }
@@ -1063,7 +1078,7 @@ class MainActivity : Activity() {
         nearSaid = -1
         if (prefs.bool("keepOn", true)) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         hideKeyboard()
-        resultsBox.visibility = View.GONE
+        setResults(false)
         map?.setPadding(0, dp(200), 0, dp(40))
         val first = r.steps.firstOrNull()
         navArrow.text = arrowFor(first?.kind ?: 1)
