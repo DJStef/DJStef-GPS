@@ -19,15 +19,17 @@ import kotlin.math.sqrt
 
 data class Pt(val lat: Double, val lon: Double)
 
+/** kind : code de manœuvre (type Valhalla) servant à choisir la flèche affichée. */
 data class Step(
     val text: String,
-    val type: String,
-    val modifier: String,
+    val kind: Int,
     val name: String,
     val dist: Double,
-    val at: Pt,
-    val exit: Int
+    val at: Pt
 )
+
+/** true = autorisé. */
+data class RouteOpts(val tolls: Boolean = true, val highways: Boolean = true, val ferries: Boolean = true)
 
 data class Route(val pts: List<Pt>, val steps: List<Step>, val dist: Double, val dur: Double)
 
@@ -161,11 +163,104 @@ object Geocoder {
     }
 }
 
-// ---------- Itinéraires (OSRM, routing.openstreetmap.de) ----------
+// ---------- Itinéraires (Valhalla, avec OSRM en secours) ----------
 
 object Router {
     /** mode : car, bike ou foot */
-    suspend fun route(mode: String, a: Pt, b: Pt): Route = withContext(Dispatchers.IO) {
+    suspend fun route(mode: String, a: Pt, b: Pt, opts: RouteOpts = RouteOpts(), exclude: List<Pt> = emptyList()): Route =
+        withContext(Dispatchers.IO) {
+            try {
+                valhalla(mode, a, b, opts, exclude)
+            } catch (e: Exception) {
+                if (exclude.isNotEmpty()) throw e
+                osrm(mode, a, b)
+            }
+        }
+
+    private fun valhalla(mode: String, a: Pt, b: Pt, opts: RouteOpts, exclude: List<Pt>): Route {
+        val costing = when (mode) {
+            "bike" -> "bicycle"
+            "foot" -> "pedestrian"
+            else -> "auto"
+        }
+        val co = JSONObject()
+        if (mode == "car") {
+            val auto = JSONObject()
+            if (!opts.tolls) auto.put("use_tolls", 0.0).put("exclude_tolls", true)
+            if (!opts.highways) auto.put("use_highways", 0.0).put("exclude_highways", true)
+            if (!opts.ferries) auto.put("use_ferry", 0.0).put("exclude_ferries", true)
+            co.put("auto", auto)
+        }
+        val locs = JSONArray()
+            .put(JSONObject().put("lat", a.lat).put("lon", a.lon).put("type", "break"))
+            .put(JSONObject().put("lat", b.lat).put("lon", b.lon).put("type", "break"))
+        val body = JSONObject()
+            .put("locations", locs)
+            .put("costing", costing)
+            .put("costing_options", co)
+            .put("directions_options", JSONObject().put("language", "fr-FR").put("units", "kilometers"))
+        if (exclude.isNotEmpty()) {
+            val ex = JSONArray()
+            for (p in exclude.take(50)) ex.put(JSONObject().put("lat", p.lat).put("lon", p.lon))
+            body.put("exclude_locations", ex)
+        }
+        val root = JSONObject(Http.post("https://valhalla1.openstreetmap.de/route", body.toString(), 30000))
+        if (root.has("error")) throw IOException(root.optString("error"))
+        val trip = root.getJSONObject("trip")
+        val leg = trip.getJSONArray("legs").getJSONObject(0)
+        val pts = decodePolyline6(leg.getString("shape"))
+        val steps = ArrayList<Step>()
+        val man = leg.getJSONArray("maneuvers")
+        for (i in 0 until man.length()) {
+            val m = man.getJSONObject(i)
+            val idx = m.optInt("begin_shape_index", 0).coerceIn(0, pts.size - 1)
+            val names = m.optJSONArray("street_names")
+            val name = if (names != null && names.length() > 0) names.getString(0) else ""
+            steps.add(
+                Step(
+                    m.optString("instruction").trim().trimEnd('.'),
+                    m.optInt("type", 8),
+                    name,
+                    m.optDouble("length", 0.0) * 1000.0,
+                    pts[idx]
+                )
+            )
+        }
+        val sum = trip.getJSONObject("summary")
+        return Route(pts, steps, sum.getDouble("length") * 1000.0, sum.getDouble("time"))
+    }
+
+    private fun decodePolyline6(s: String): List<Pt> {
+        val out = ArrayList<Pt>()
+        var i = 0
+        var lat = 0
+        var lon = 0
+        while (i < s.length) {
+            var shift = 0
+            var result = 0
+            var b: Int
+            do {
+                b = s[i++].code - 63
+                result = result or ((b and 0x1f) shl shift)
+                shift += 5
+            } while (b >= 0x20)
+            lat += if ((result and 1) != 0) (result shr 1).inv() else (result shr 1)
+            shift = 0
+            result = 0
+            do {
+                b = s[i++].code - 63
+                result = result or ((b and 0x1f) shl shift)
+                shift += 5
+            } while (b >= 0x20)
+            lon += if ((result and 1) != 0) (result shr 1).inv() else (result shr 1)
+            out.add(Pt(lat / 1e6, lon / 1e6))
+        }
+        return out
+    }
+
+    // --- Secours : OSRM (routing.openstreetmap.de) ---
+
+    private fun osrm(mode: String, a: Pt, b: Pt): Route {
         val url = "https://routing.openstreetmap.de/routed-$mode/route/v1/driving/" +
             "${a.lon},${a.lat};${b.lon},${b.lat}?overview=full&geometries=geojson&steps=true"
         val root = JSONObject(Http.get(url, 25000))
@@ -189,13 +284,29 @@ object Router {
                 val mod = m.optString("modifier")
                 val name = s.optString("name")
                 val exit = m.optInt("exit", 0)
-                steps.add(Step(instr(type, mod, name, exit), type, mod, name, s.getDouble("distance"), Pt(loc.getDouble(1), loc.getDouble(0)), exit))
+                steps.add(Step(osrmText(type, mod, name, exit), osrmKind(type, mod), name, s.getDouble("distance"), Pt(loc.getDouble(1), loc.getDouble(0))))
             }
         }
-        Route(pts, steps, r.getDouble("distance"), r.getDouble("duration"))
+        return Route(pts, steps, r.getDouble("distance"), r.getDouble("duration"))
     }
 
-    private fun instr(type: String, mod: String, name: String, exit: Int): String {
+    private fun osrmKind(type: String, mod: String): Int = when (type) {
+        "depart" -> 1
+        "arrive" -> 4
+        "roundabout", "rotary", "roundabout turn" -> 26
+        else -> when (mod) {
+            "left" -> 15
+            "right" -> 10
+            "slight left" -> 16
+            "slight right" -> 9
+            "sharp left" -> 14
+            "sharp right" -> 11
+            "uturn" -> 12
+            else -> 8
+        }
+    }
+
+    private fun osrmText(type: String, mod: String, name: String, exit: Int): String {
         val dir = when (mod) {
             "left" -> "à gauche"
             "right" -> "à droite"
@@ -218,6 +329,83 @@ object Router {
                 "straight", "" -> "Continuez tout droit$on"
                 else -> "Tournez $dir$on"
             }
+        }
+    }
+}
+
+// ---------- Limitations de vitesse (OpenStreetMap, tag maxspeed, via Overpass) ----------
+
+object SpeedLimits {
+    private val ENDPOINTS = listOf(
+        "https://overpass-api.de/api/interpreter",
+        "https://overpass.kumi.systems/api/interpreter"
+    )
+    private const val ROADS = "motorway|trunk|primary|secondary|tertiary|unclassified|residential|living_street|" +
+        "motorway_link|trunk_link|primary_link|secondary_link|tertiary_link|service"
+
+    /** Limite en km/h de la route sous la position donnée, ou null si inconnue. */
+    suspend fun at(p: Pt, heading: Double?): Int? = withContext(Dispatchers.IO) {
+        val q = "[out:json][timeout:6];way(around:25,${p.lat},${p.lon})[highway~\"^($ROADS)\$\"];out tags geom;"
+        var txt: String? = null
+        for (ep in ENDPOINTS) {
+            try {
+                txt = Http.get("$ep?data=" + URLEncoder.encode(q, "UTF-8"), 9000)
+                break
+            } catch (e: Exception) {
+            }
+        }
+        val t = txt ?: throw IOException("Overpass indisponible")
+        val els = JSONObject(t).getJSONArray("elements")
+        var bestTags: JSONObject? = null
+        var bestScore = Double.MAX_VALUE
+        var bestBearing = 0.0
+        for (i in 0 until els.length()) {
+            val e = els.getJSONObject(i)
+            val tags = e.optJSONObject("tags") ?: continue
+            val g = e.optJSONArray("geometry") ?: continue
+            var minD = Double.MAX_VALUE
+            var segB = 0.0
+            for (j in 0 until g.length() - 1) {
+                val a = g.getJSONObject(j)
+                val b = g.getJSONObject(j + 1)
+                val pa = Pt(a.getDouble("lat"), a.getDouble("lon"))
+                val pb = Pt(b.getDouble("lat"), b.getDouble("lon"))
+                val d = Geo.distToSegment(p, pa, pb)
+                if (d < minD) {
+                    minD = d
+                    segB = Geo.bearing(pa, pb)
+                }
+            }
+            val score = minD + if (tags.optString("highway") == "service") 15.0 else 0.0
+            if (score < bestScore) {
+                bestScore = score
+                bestTags = tags
+                bestBearing = segB
+            }
+        }
+        val tags = bestTags ?: return@withContext null
+        val backward = heading != null && Geo.angleDiff(bestBearing, heading) > 90.0
+        val dirKey = if (backward) "maxspeed:backward" else "maxspeed:forward"
+        val raw = tags.optString(dirKey).ifBlank { tags.optString("maxspeed") }
+        val v = parse(raw)
+        if (v != null) return@withContext v
+        when (tags.optString("highway")) {
+            "motorway" -> 130
+            "residential" -> 50
+            "living_street" -> 20
+            else -> null
+        }
+    }
+
+    private fun parse(s: String): Int? {
+        val v = s.trim().lowercase()
+        if (v.isEmpty()) return null
+        return when (v) {
+            "fr:urban" -> 50
+            "fr:rural" -> 80
+            "fr:motorway" -> 130
+            "walk" -> 10
+            else -> Regex("^(\\d{1,3})( ?km/h)?$").find(v)?.groupValues?.get(1)?.toIntOrNull()
         }
     }
 }

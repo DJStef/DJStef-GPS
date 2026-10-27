@@ -1,3 +1,5 @@
+@file:Suppress("DEPRECATION")
+
 package fr.djstef.gps
 
 import android.Manifest
@@ -22,8 +24,12 @@ import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
 import android.widget.FrameLayout
+import android.widget.HorizontalScrollView
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
+import android.widget.SeekBar
+import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
 import kotlinx.coroutines.CoroutineScope
@@ -33,6 +39,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.maplibre.android.MapLibre
 import org.maplibre.android.camera.CameraPosition
 import org.maplibre.android.camera.CameraUpdateFactory
@@ -41,15 +48,19 @@ import org.maplibre.android.geometry.LatLngBounds
 import org.maplibre.android.maps.MapLibreMap
 import org.maplibre.android.maps.MapView
 import org.maplibre.android.maps.Style
+import org.maplibre.android.style.expressions.Expression
 import org.maplibre.android.style.layers.CircleLayer
 import org.maplibre.android.style.layers.LineLayer
 import org.maplibre.android.style.layers.Property
 import org.maplibre.android.style.layers.PropertyFactory
+import org.maplibre.android.style.layers.SymbolLayer
 import org.maplibre.android.style.sources.GeoJsonSource
 import org.maplibre.geojson.Feature
 import org.maplibre.geojson.FeatureCollection
 import org.maplibre.geojson.LineString
 import org.maplibre.geojson.Point
+import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.util.Locale
 import kotlin.math.max
 import kotlin.math.roundToInt
@@ -57,35 +68,64 @@ import kotlin.math.roundToInt
 class MainActivity : Activity() {
 
     companion object {
-        const val VERSION = "0.1"
+        const val VERSION = "0.2"
         const val STYLE_URL = "https://tiles.openfreemap.org/styles/liberty"
+
+        // Palette (même esprit que l'appli IPTV : fond bleu nuit, une couleur par section)
+        const val BG = "#0B1220"
+        const val BAR = "#101A30"
+        const val CARD = "#16203A"
         const val NAVY = "#E6101828"
-        const val ORANGE = "#FF9F1C"
-        const val RED = "#E53935"
-        const val GREEN = "#43A047"
-        const val GREY = "#3A4256"
+        const val ORANGE = "#F57C00"
+        const val ORANGE_L = "#FF9F1C"
+        const val RED = "#C62828"
+        const val BLUE = "#1565C0"
+        const val GREEN = "#2E7D32"
+        const val SLATE = "#455A64"
+        const val GREY = "#37474F"
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private lateinit var prefs: AppPrefs
 
+    private lateinit var rootLayout: FrameLayout
     private lateinit var mapView: MapView
     private var map: MapLibreMap? = null
     private var style: Style? = null
 
+    private lateinit var topBox: LinearLayout
+    private lateinit var bottomBox: LinearLayout
+    private lateinit var searchRow: LinearLayout
     private lateinit var searchBox: EditText
     private lateinit var resultsBox: LinearLayout
-    private lateinit var navBanner: TextView
+    private lateinit var navBanner: LinearLayout
+    private lateinit var navArrow: TextView
+    private lateinit var navDist: TextView
+    private lateinit var navStreet: TextView
     private lateinit var radarBanner: TextView
     private lateinit var speedView: TextView
+    private lateinit var limitView: TextView
     private lateinit var panel: LinearLayout
-    private lateinit var panelInfo: TextView
+    private lateinit var etaView: TextView
+    private lateinit var subView: TextView
+    private lateinit var destView: TextView
+    private lateinit var modeRow: LinearLayout
     private lateinit var startBtn: TextView
+    private lateinit var cancelBtn: TextView
+    private lateinit var muteBtn: TextView
+    private lateinit var viewBtn: TextView
     private val modeBtns = HashMap<String, TextView>()
+
+    private var topInset = 0
+    private var bottomInset = 0
+    private var bottomH = 0
 
     private var tts: TextToSpeech? = null
     private var ttsReady = false
+    private var muted = false
 
     private var me: Location? = null
+    private var lastBearing = 0f
     private var follow = true
     private var navigating = false
     private var mode = "car"
@@ -97,16 +137,24 @@ class MainActivity : Activity() {
     private var nearSaid = -1
     private var offCount = 0
     private var rerouting = false
+    private var pendingFav: String? = null
 
     private var fixedRadars: List<Radar> = emptyList()
-    private var localReports = ArrayList<Pair<Report, Long>>() // signalement + expiration
+    private var localReports = ArrayList<Pair<Report, Long>>()
     private var remoteReports: List<Report> = emptyList()
     private val alerted = HashSet<String>()
     private var pollJob: Job? = null
 
-    private val prefs by lazy { getSharedPreferences("djstef_gps", Context.MODE_PRIVATE) }
-    private val locMgr by lazy { getSystemService(Context.LOCATION_SERVICE) as LocationManager }
+    private var limitNow: Int? = null
+    private var lastLimitPt: Pt? = null
+    private var lastLimitTime = 0L
+    private var limitBusy = false
+    private var lastSpeedWarn = 0L
 
+    private var menuView: View? = null
+    private var menuPage: String? = null
+
+    private val locMgr by lazy { getSystemService(Context.LOCATION_SERVICE) as LocationManager }
     private val locListener = LocationListener { loc -> onLocation(loc) }
 
     private fun dp(v: Int): Int = (v * resources.displayMetrics.density).roundToInt()
@@ -115,6 +163,7 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        prefs = AppPrefs(this)
         MapLibre.getInstance(this)
         tts = TextToSpeech(this) {
             if (it == TextToSpeech.SUCCESS) {
@@ -150,6 +199,7 @@ class MainActivity : Activity() {
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
         when {
+            menuView != null -> if (menuPage != null) showMenu(null) else closeMenu()
             resultsBox.visibility == View.VISIBLE -> resultsBox.visibility = View.GONE
             navigating -> stopNavigation()
             route != null -> clearRoute()
@@ -157,11 +207,32 @@ class MainActivity : Activity() {
         }
     }
 
-    // ---------- Interface ----------
+    // ---------- Aides d'interface ----------
 
-    private fun bg(color: String, radius: Int = 14): GradientDrawable {
+    private fun colorBg(color: String, radius: Int = 14): GradientDrawable {
         val g = GradientDrawable()
         g.setColor(Color.parseColor(color))
+        g.cornerRadius = dp(radius).toFloat()
+        return g
+    }
+
+    private fun ovalBg(color: String): GradientDrawable {
+        val g = GradientDrawable()
+        g.shape = GradientDrawable.OVAL
+        g.setColor(Color.parseColor(color))
+        return g
+    }
+
+    private fun darker(color: Int, f: Float): Int {
+        val hsv = FloatArray(3)
+        Color.colorToHSV(color, hsv)
+        hsv[2] = hsv[2] * f
+        return Color.HSVToColor(hsv)
+    }
+
+    private fun gradBg(color: String, radius: Int): GradientDrawable {
+        val c = Color.parseColor(color)
+        val g = GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, intArrayOf(c, darker(c, 0.7f)))
         g.cornerRadius = dp(radius).toFloat()
         return g
     }
@@ -178,46 +249,57 @@ class MainActivity : Activity() {
     private fun button(text: String, color: String, onClick: () -> Unit): TextView {
         val t = label(text, 15f, true)
         t.gravity = Gravity.CENTER
-        t.setPadding(dp(14), dp(12), dp(14), dp(12))
-        t.background = bg(color)
+        t.isSingleLine = true
+        t.setPadding(dp(10), dp(13), dp(10), dp(13))
+        t.background = colorBg(color)
         t.setOnClickListener { onClick() }
         return t
     }
 
-    private fun roundBtn(text: String, onClick: () -> Unit): TextView {
+    private fun circleBtn(text: String, size: Int, onClick: () -> Unit): TextView {
         val t = label(text, 20f, true)
         t.gravity = Gravity.CENTER
-        val g = GradientDrawable()
-        g.shape = GradientDrawable.OVAL
-        g.setColor(Color.parseColor(NAVY))
-        t.background = g
-        t.layoutParams = LinearLayout.LayoutParams(dp(52), dp(52)).also { it.topMargin = dp(10) }
+        t.background = ovalBg(NAVY)
+        t.layoutParams = LinearLayout.LayoutParams(dp(size), dp(size))
         t.setOnClickListener { onClick() }
         return t
     }
+
+    private fun toast(s: String) = Toast.makeText(this, s, Toast.LENGTH_LONG).show()
+
+    private fun hideKeyboard() {
+        (getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).hideSoftInputFromWindow(searchBox.windowToken, 0)
+    }
+
+    // ---------- Interface principale (portrait) ----------
 
     private fun buildUi(savedInstanceState: Bundle?) {
         val root = FrameLayout(this)
+        rootLayout = root
         mapView = MapView(this)
         mapView.onCreate(savedInstanceState)
         root.addView(mapView, FrameLayout.LayoutParams(-1, -1))
         mapView.getMapAsync { m ->
             map = m
             m.cameraPosition = CameraPosition.Builder().target(LatLng(46.6, 2.5)).zoom(5.0).build()
+            m.uiSettings.isCompassEnabled = false
             m.setStyle(Style.Builder().fromUri(STYLE_URL)) { st -> onStyleReady(m, st) }
         }
 
-        // Haut : recherche + résultats + bandeaux
-        val top = LinearLayout(this)
-        top.orientation = LinearLayout.VERTICAL
-        top.setPadding(dp(10), dp(10), dp(10), 0)
+        // --- Haut : recherche, résultats, consigne, alerte radar ---
+        topBox = LinearLayout(this)
+        topBox.orientation = LinearLayout.VERTICAL
+        topBox.setPadding(dp(10), dp(10), dp(10), 0)
 
+        searchRow = LinearLayout(this)
+        searchRow.orientation = LinearLayout.HORIZONTAL
+        searchRow.gravity = Gravity.CENTER_VERTICAL
         searchBox = EditText(this)
-        searchBox.hint = "Rechercher une adresse ou un lieu"
+        searchBox.hint = "Où allez-vous ?"
         searchBox.setHintTextColor(Color.parseColor("#9AA3B5"))
         searchBox.setTextColor(Color.WHITE)
         searchBox.textSize = 16f
-        searchBox.background = bg(NAVY, 24)
+        searchBox.background = colorBg(NAVY, 26)
         searchBox.setPadding(dp(18), dp(12), dp(18), dp(12))
         searchBox.inputType = InputType.TYPE_CLASS_TEXT
         searchBox.imeOptions = EditorInfo.IME_ACTION_SEARCH
@@ -225,112 +307,199 @@ class MainActivity : Activity() {
         searchBox.setOnEditorActionListener { _, id, _ ->
             if (id == EditorInfo.IME_ACTION_SEARCH) { doSearch(); true } else false
         }
-        top.addView(searchBox, LinearLayout.LayoutParams(-1, -2))
+        searchBox.setOnFocusChangeListener { _, has -> if (has && searchBox.text.isNullOrBlank()) fillSuggestions() }
+        searchBox.setOnClickListener { if (searchBox.text.isNullOrBlank()) fillSuggestions() }
+        searchRow.addView(searchBox, LinearLayout.LayoutParams(0, -2, 1f))
+        val menuBtn = circleBtn("☰", 48) { showMenu(null) }
+        (menuBtn.layoutParams as LinearLayout.LayoutParams).leftMargin = dp(8)
+        searchRow.addView(menuBtn)
+        topBox.addView(searchRow, LinearLayout.LayoutParams(-1, -2))
 
         val resScroll = ScrollView(this)
         resultsBox = LinearLayout(this)
         resultsBox.orientation = LinearLayout.VERTICAL
-        resultsBox.background = bg(NAVY, 14)
+        resultsBox.background = colorBg(NAVY, 16)
         resultsBox.visibility = View.GONE
         resScroll.addView(resultsBox)
-        top.addView(resScroll, LinearLayout.LayoutParams(-1, -2).also { it.topMargin = dp(6) })
+        topBox.addView(resScroll, LinearLayout.LayoutParams(-1, -2).also { it.topMargin = dp(6) })
 
-        navBanner = label("", 18f, true)
-        navBanner.background = bg("#E60F5132", 14)
-        navBanner.setPadding(dp(14), dp(12), dp(14), dp(12))
+        // Consigne de guidage : flèche + distance + rue
+        navBanner = LinearLayout(this)
+        navBanner.orientation = LinearLayout.HORIZONTAL
+        navBanner.gravity = Gravity.CENTER_VERTICAL
+        navBanner.background = gradBg(GREEN, 18)
+        navBanner.setPadding(dp(16), dp(12), dp(16), dp(12))
         navBanner.visibility = View.GONE
-        top.addView(navBanner, LinearLayout.LayoutParams(-1, -2).also { it.topMargin = dp(8) })
+        navArrow = label("↑", 44f, true)
+        navArrow.gravity = Gravity.CENTER
+        navBanner.addView(navArrow, LinearLayout.LayoutParams(dp(64), -2))
+        val navCol = LinearLayout(this)
+        navCol.orientation = LinearLayout.VERTICAL
+        navDist = label("", 28f, true)
+        navStreet = label("", 16f, false, "#E8F5E9")
+        navStreet.maxLines = 2
+        navCol.addView(navDist)
+        navCol.addView(navStreet)
+        navBanner.addView(navCol, LinearLayout.LayoutParams(0, -2, 1f).also { it.leftMargin = dp(8) })
+        topBox.addView(navBanner, LinearLayout.LayoutParams(-1, -2))
 
         radarBanner = label("", 18f, true)
-        radarBanner.background = bg("#F2B71C1C", 14)
+        radarBanner.background = gradBg(RED, 16)
         radarBanner.setPadding(dp(14), dp(12), dp(14), dp(12))
         radarBanner.visibility = View.GONE
-        top.addView(radarBanner, LinearLayout.LayoutParams(-1, -2).also { it.topMargin = dp(8) })
+        topBox.addView(radarBanner, LinearLayout.LayoutParams(-1, -2).also { it.topMargin = dp(8) })
 
-        root.addView(top, FrameLayout.LayoutParams(-1, -2, Gravity.TOP))
+        root.addView(topBox, FrameLayout.LayoutParams(-1, -2, Gravity.TOP))
 
-        // Droite : boutons
+        // --- Droite : boutons ---
         val side = LinearLayout(this)
         side.orientation = LinearLayout.VERTICAL
-        side.addView(roundBtn("◎") { recenter() })
-        side.addView(roundBtn("⚠") { reportDialog() })
+        val recBtn = circleBtn("◎", 52) { recenter() }
+        val repBtn = circleBtn("⚠", 52) { reportDialog() }
+        muteBtn = circleBtn("🔊", 52) { toggleMute() }
+        viewBtn = circleBtn("3D", 52) { toggleView() }
+        for (b in listOf(recBtn, repBtn, muteBtn, viewBtn)) {
+            (b.layoutParams as LinearLayout.LayoutParams).topMargin = dp(10)
+            side.addView(b)
+        }
+        muteBtn.visibility = View.GONE
+        viewBtn.visibility = View.GONE
         val sideLp = FrameLayout.LayoutParams(-2, -2, Gravity.END or Gravity.CENTER_VERTICAL)
         sideLp.rightMargin = dp(10)
         root.addView(side, sideLp)
 
-        // Bas gauche : vitesse + version
+        // --- Bas : vitesse, limite, panneau d'itinéraire ---
+        bottomBox = LinearLayout(this)
+        bottomBox.orientation = LinearLayout.VERTICAL
+
+        val infoRow = LinearLayout(this)
+        infoRow.orientation = LinearLayout.HORIZONTAL
+        infoRow.gravity = Gravity.BOTTOM
         speedView = label("0\nkm/h", 18f, true)
         speedView.gravity = Gravity.CENTER
-        speedView.background = bg(NAVY, 40)
-        val spLp = FrameLayout.LayoutParams(dp(78), dp(78), Gravity.BOTTOM or Gravity.START)
-        spLp.leftMargin = dp(10)
-        spLp.bottomMargin = dp(16)
-        root.addView(speedView, spLp)
+        speedView.background = ovalBg(NAVY)
+        infoRow.addView(speedView, LinearLayout.LayoutParams(dp(76), dp(76)))
+        limitView = label("", 24f, true, "#111111")
+        limitView.gravity = Gravity.CENTER
+        val lg = GradientDrawable()
+        lg.shape = GradientDrawable.OVAL
+        lg.setColor(Color.WHITE)
+        lg.setStroke(dp(6), Color.parseColor("#D32F2F"))
+        limitView.background = lg
+        limitView.visibility = View.GONE
+        infoRow.addView(limitView, LinearLayout.LayoutParams(dp(64), dp(64)).also { it.leftMargin = dp(10) })
+        bottomBox.addView(infoRow, LinearLayout.LayoutParams(-1, -2).also { it.bottomMargin = dp(8) })
 
-        val ver = label("v$VERSION", 11f, false, "#C0C7D6")
-        ver.setOnLongClickListener { serverDialog(); true }
-        val vLp = FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM or Gravity.END)
-        vLp.rightMargin = dp(10)
-        vLp.bottomMargin = dp(2)
-        ver.setShadowLayer(3f, 0f, 0f, Color.BLACK)
-        root.addView(ver, vLp)
-
-        // Bas : panneau itinéraire
         panel = LinearLayout(this)
         panel.orientation = LinearLayout.VERTICAL
-        panel.background = bg(NAVY, 18)
-        panel.setPadding(dp(14), dp(12), dp(14), dp(12))
+        panel.background = colorBg("#F2101828", 22)
+        panel.setPadding(dp(16), dp(14), dp(16), dp(14))
         panel.visibility = View.GONE
-        panelInfo = label("", 17f, true)
-        panel.addView(panelInfo)
+        etaView = label("", 22f, true)
+        subView = label("", 15f, false, "#C0C7D6")
+        destView = label("", 14f, false, "#9AA3B5")
+        destView.maxLines = 1
+        panel.addView(etaView)
+        panel.addView(subView)
+        panel.addView(destView)
 
-        val modes = LinearLayout(this)
-        modes.orientation = LinearLayout.HORIZONTAL
-        for ((key, name) in listOf("car" to "Voiture", "bike" to "Vélo", "foot" to "Marche")) {
+        modeRow = LinearLayout(this)
+        modeRow.orientation = LinearLayout.HORIZONTAL
+        for ((key, name) in listOf("car" to "🚗 Voiture", "bike" to "🚲 Vélo", "foot" to "🚶 Marche")) {
             val b = button(name, GREY) { setMode(key) }
+            b.textSize = 14f
             modeBtns[key] = b
-            modes.addView(b, LinearLayout.LayoutParams(0, -2, 1f).also { it.rightMargin = dp(6) })
+            modeRow.addView(b, LinearLayout.LayoutParams(0, -2, 1f).also { it.rightMargin = dp(6) })
         }
-        panel.addView(modes, LinearLayout.LayoutParams(-1, -2).also { it.topMargin = dp(8) })
+        panel.addView(modeRow, LinearLayout.LayoutParams(-1, -2).also { it.topMargin = dp(10) })
 
         val actions = LinearLayout(this)
         actions.orientation = LinearLayout.HORIZONTAL
         startBtn = button("Démarrer", GREEN) { if (navigating) stopNavigation() else startNavigation() }
+        cancelBtn = button("Annuler", RED) { clearRoute() }
         actions.addView(startBtn, LinearLayout.LayoutParams(0, -2, 2f).also { it.rightMargin = dp(6) })
-        actions.addView(button("Annuler", RED.replace("#", "#")) { clearRoute() }, LinearLayout.LayoutParams(0, -2, 1f))
-        panel.addView(actions, LinearLayout.LayoutParams(-1, -2).also { it.topMargin = dp(8) })
+        actions.addView(cancelBtn, LinearLayout.LayoutParams(0, -2, 1f))
+        panel.addView(actions, LinearLayout.LayoutParams(-1, -2).also { it.topMargin = dp(10) })
+        bottomBox.addView(panel, LinearLayout.LayoutParams(-1, -2))
 
-        val pLp = FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM)
-        pLp.leftMargin = dp(100)
-        pLp.rightMargin = dp(72)
-        pLp.bottomMargin = dp(16)
-        root.addView(panel, pLp)
+        val bLp = FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM)
+        bLp.leftMargin = dp(10)
+        bLp.rightMargin = dp(10)
+        bLp.bottomMargin = dp(10)
+        root.addView(bottomBox, bLp)
+        bottomBox.addOnLayoutChangeListener { _, _, top, _, bottom, _, _, _, _ ->
+            bottomH = bottom - top
+            applyMapMargins()
+        }
+
+        root.setOnApplyWindowInsetsListener { _, ins ->
+            topInset = ins.systemWindowInsetTop
+            bottomInset = ins.systemWindowInsetBottom
+            topBox.setPadding(dp(10), topInset + dp(10), dp(10), 0)
+            (bottomBox.layoutParams as FrameLayout.LayoutParams).bottomMargin = bottomInset + dp(10)
+            bottomBox.requestLayout()
+            ins
+        }
 
         setContentView(root)
         updateModeButtons()
     }
 
-    private fun toast(s: String) = Toast.makeText(this, s, Toast.LENGTH_LONG).show()
+    private fun applyMapMargins() {
+        val ui = map?.uiSettings ?: return
+        val b = bottomH + bottomInset + dp(16)
+        ui.logoGravity = Gravity.BOTTOM or Gravity.END
+        ui.attributionGravity = Gravity.BOTTOM or Gravity.END
+        ui.setLogoMargins(0, 0, dp(10), b)
+        ui.setAttributionMargins(0, 0, dp(96), b)
+    }
 
     private fun updateModeButtons() {
-        for ((k, b) in modeBtns) b.background = bg(if (k == mode) ORANGE else GREY)
-        for ((k, b) in modeBtns) b.setTextColor(Color.parseColor(if (k == mode) "#0B1220" else "#FFFFFF"))
+        for ((k, b) in modeBtns) {
+            b.background = colorBg(if (k == mode) ORANGE_L else GREY)
+            b.setTextColor(Color.parseColor(if (k == mode) "#0B1220" else "#FFFFFF"))
+        }
+    }
+
+    /** Affiche ou masque les éléments selon l'état : sans route, aperçu, guidage. */
+    private fun refreshPanel() {
+        panel.visibility = if (route != null) View.VISIBLE else View.GONE
+        modeRow.visibility = if (navigating) View.GONE else View.VISIBLE
+        cancelBtn.visibility = if (navigating) View.GONE else View.VISIBLE
+        startBtn.text = if (navigating) "Arrêter" else "Démarrer"
+        startBtn.background = colorBg(if (navigating) RED else GREEN)
+        searchRow.visibility = if (navigating) View.GONE else View.VISIBLE
+        navBanner.visibility = if (navigating) View.VISIBLE else View.GONE
+        muteBtn.visibility = if (navigating) View.VISIBLE else View.GONE
+        viewBtn.visibility = if (navigating) View.VISIBLE else View.GONE
+        viewBtn.text = if (prefs.bool("view3d", true)) "3D" else "2D"
+        muteBtn.text = if (muted) "🔇" else "🔊"
+    }
+
+    private fun toggleMute() {
+        muted = !muted
+        if (muted) tts?.stop()
+        refreshPanel()
+    }
+
+    private fun toggleView() {
+        prefs.setBool("view3d", !prefs.bool("view3d", true))
+        refreshPanel()
+        applyCarMode()
+        me?.let { moveCamera(it) }
     }
 
     // ---------- Carte ----------
 
     private fun onStyleReady(m: MapLibreMap, st: Style) {
         style = st
-        st.addSource(GeoJsonSource("radars", FeatureCollection.fromFeatures(emptyList<Feature>())))
-        st.addSource(GeoJsonSource("reports", FeatureCollection.fromFeatures(emptyList<Feature>())))
-        st.addSource(GeoJsonSource("route", FeatureCollection.fromFeatures(emptyList<Feature>())))
-        st.addSource(GeoJsonSource("dest", FeatureCollection.fromFeatures(emptyList<Feature>())))
-        st.addSource(GeoJsonSource("me", FeatureCollection.fromFeatures(emptyList<Feature>())))
-
+        for (id in listOf("radars", "reports", "route", "dest", "me")) {
+            st.addSource(GeoJsonSource(id, FeatureCollection.fromFeatures(emptyList<Feature>())))
+        }
         st.addLayer(
             LineLayer("route-layer", "route").withProperties(
-                PropertyFactory.lineColor(ORANGE),
-                PropertyFactory.lineWidth(7f),
+                PropertyFactory.lineColor(ORANGE_L),
+                PropertyFactory.lineWidth(8f),
                 PropertyFactory.lineCap(Property.LINE_CAP_ROUND),
                 PropertyFactory.lineJoin(Property.LINE_JOIN_ROUND)
             )
@@ -338,7 +507,7 @@ class MainActivity : Activity() {
         st.addLayer(
             CircleLayer("radar-layer", "radars").withProperties(
                 PropertyFactory.circleRadius(6f),
-                PropertyFactory.circleColor(RED),
+                PropertyFactory.circleColor("#E53935"),
                 PropertyFactory.circleStrokeColor("#FFFFFF"),
                 PropertyFactory.circleStrokeWidth(1.5f)
             )
@@ -354,19 +523,19 @@ class MainActivity : Activity() {
         st.addLayer(
             CircleLayer("dest-layer", "dest").withProperties(
                 PropertyFactory.circleRadius(9f),
-                PropertyFactory.circleColor(GREEN),
+                PropertyFactory.circleColor("#43A047"),
                 PropertyFactory.circleStrokeColor("#FFFFFF"),
                 PropertyFactory.circleStrokeWidth(3f)
             )
         )
         st.addLayer(
-            CircleLayer("me-layer", "me").withProperties(
-                PropertyFactory.circleRadius(9f),
-                PropertyFactory.circleColor("#2196F3"),
-                PropertyFactory.circleStrokeColor("#FFFFFF"),
-                PropertyFactory.circleStrokeWidth(3f)
+            SymbolLayer("me-layer", "me").withProperties(
+                PropertyFactory.iconAllowOverlap(true),
+                PropertyFactory.iconIgnorePlacement(true)
             )
         )
+        applyCar()
+        applyRadarVisibility()
 
         m.addOnMapLongClickListener { ll ->
             setDestination(Pt(ll.latitude, ll.longitude), "Point choisi sur la carte")
@@ -375,10 +544,57 @@ class MainActivity : Activity() {
         m.addOnCameraMoveStartedListener { reason ->
             if (reason == MapLibreMap.OnCameraMoveStartedListener.REASON_API_GESTURE) follow = false
         }
+        applyMapMargins()
         refreshRadarLayer()
         refreshReportLayer()
         me?.let { updateMeLayer(it) }
         me?.let { moveCamera(it, true) }
+    }
+
+    // --- Voiture sur la carte ---
+
+    private fun carMode3d() = navigating && prefs.bool("view3d", true) && !prefs.bool("northUp", false)
+
+    private fun applyCar() {
+        val st = style ?: return
+        val model = prefs.int("car", 0)
+        val col = Color.parseColor(prefs.str("carColor", CarSprites.COLORS[0]))
+        st.removeImage("car-top")
+        st.addImage("car-top", CarSprites.draw(model, col))
+        st.removeImage("car-rear")
+        st.addImage("car-rear", CarSprites.drawRear(model, col))
+        applyCarMode()
+    }
+
+    private fun applyCarMode() {
+        val layer = style?.getLayerAs<SymbolLayer>("me-layer") ?: return
+        val size = prefs.float("carSize", 1f)
+        if (carMode3d()) {
+            // Vue de derrière, « debout » face à la caméra inclinée
+            layer.setProperties(
+                PropertyFactory.iconImage("car-rear"),
+                PropertyFactory.iconSize(0.5f * size),
+                PropertyFactory.iconAnchor(Property.ICON_ANCHOR_BOTTOM),
+                PropertyFactory.iconRotationAlignment(Property.ICON_ROTATION_ALIGNMENT_VIEWPORT),
+                PropertyFactory.iconPitchAlignment(Property.ICON_PITCH_ALIGNMENT_VIEWPORT),
+                PropertyFactory.iconRotate(0f)
+            )
+        } else {
+            // Vue du dessus, posée sur la carte et orientée selon le cap
+            layer.setProperties(
+                PropertyFactory.iconImage("car-top"),
+                PropertyFactory.iconSize(0.4f * size),
+                PropertyFactory.iconAnchor(Property.ICON_ANCHOR_CENTER),
+                PropertyFactory.iconRotationAlignment(Property.ICON_ROTATION_ALIGNMENT_MAP),
+                PropertyFactory.iconPitchAlignment(Property.ICON_PITCH_ALIGNMENT_MAP),
+                PropertyFactory.iconRotate(Expression.get("bearing"))
+            )
+        }
+    }
+
+    private fun applyRadarVisibility() {
+        val vis = if (prefs.bool("showFixed", true)) Property.VISIBLE else Property.NONE
+        style?.getLayerAs<CircleLayer>("radar-layer")?.setProperties(PropertyFactory.visibility(vis))
     }
 
     private fun point(p: Pt) = Feature.fromGeometry(Point.fromLngLat(p.lon, p.lat))
@@ -401,15 +617,20 @@ class MainActivity : Activity() {
 
     private fun updateMeLayer(loc: Location) {
         val src = style?.getSourceAs<GeoJsonSource>("me") ?: return
-        src.setGeoJson(point(Pt(loc.latitude, loc.longitude)))
+        val f = point(Pt(loc.latitude, loc.longitude))
+        f.addNumberProperty("bearing", lastBearing.toDouble())
+        src.setGeoJson(f)
     }
 
     private fun moveCamera(loc: Location, first: Boolean = false) {
         val m = map ?: return
         val b = CameraPosition.Builder().target(LatLng(loc.latitude, loc.longitude))
         if (navigating) {
-            b.zoom(17.0).tilt(45.0)
-            if (loc.hasBearing() && loc.speed > 2f) b.bearing(loc.bearing.toDouble())
+            val kmh = if (loc.hasSpeed()) loc.speed * 3.6 else 0.0
+            val z = if (kmh < 30) 18.0 else if (kmh < 70) 17.3 else if (kmh < 100) 16.6 else 16.0
+            b.zoom(z)
+            b.tilt(if (prefs.bool("view3d", true)) 60.0 else 0.0)
+            b.bearing(if (prefs.bool("northUp", false)) 0.0 else lastBearing.toDouble())
         } else {
             b.zoom(if (first) 14.0 else max(m.cameraPosition.zoom, 14.0)).tilt(0.0).bearing(0.0)
         }
@@ -451,45 +672,123 @@ class MainActivity : Activity() {
     }
 
     private fun onLocation(loc: Location) {
-        // On ignore une position réseau moins précise quand le GPS est actif.
         val prev = me
         if (prev != null && loc.provider == LocationManager.NETWORK_PROVIDER &&
             prev.provider == LocationManager.GPS_PROVIDER && loc.time - prev.time < 10000
         ) return
         me = loc
+        if (loc.hasBearing() && loc.speed > 1.5f) lastBearing = loc.bearing
         updateMeLayer(loc)
         if (follow) moveCamera(loc)
         val kmh = if (loc.hasSpeed()) (loc.speed * 3.6f).roundToInt() else 0
         speedView.text = "$kmh\nkm/h"
+        updateLimit(loc)
+        val lim = limitNow
+        val over = lim != null && kmh > lim + 3
+        speedView.background = ovalBg(if (over) "#D32F2F" else NAVY)
+        val now = System.currentTimeMillis()
+        if (over && lim != null && prefs.bool("speedAlert", true) && now - lastSpeedWarn > 25000) {
+            lastSpeedWarn = now
+            speak("Attention, vitesse limitée à $lim")
+        }
         checkRadars(loc, kmh)
         if (navigating) navUpdate(loc)
     }
 
-    // ---------- Recherche ----------
+    // ---------- Limitations de vitesse ----------
+
+    private fun updateLimit(loc: Location) {
+        if (!prefs.bool("showLimit", true) || limitBusy) return
+        val now = System.currentTimeMillis()
+        val p = Pt(loc.latitude, loc.longitude)
+        val lp = lastLimitPt
+        if (lp != null) {
+            if (now - lastLimitTime < 4000) return
+            if (loc.speed < 1f) return
+            if (Geo.dist(lp, p) < 30.0 && now - lastLimitTime < 20000) return
+        }
+        limitBusy = true
+        lastLimitPt = p
+        lastLimitTime = now
+        val heading = if (loc.hasBearing() && loc.speed > 1.5f) loc.bearing.toDouble() else null
+        scope.launch {
+            try {
+                limitNow = SpeedLimits.at(p, heading)
+                refreshLimitView()
+            } catch (e: Exception) {
+            } finally {
+                limitBusy = false
+            }
+        }
+    }
+
+    private fun refreshLimitView() {
+        val l = limitNow
+        if (l != null && prefs.bool("showLimit", true)) {
+            limitView.text = "$l"
+            limitView.visibility = View.VISIBLE
+        } else {
+            limitView.visibility = View.GONE
+        }
+    }
+
+    // ---------- Recherche, favoris, récents ----------
+
+    private fun addRow(text: String, onClick: () -> Unit, onLong: (() -> Unit)? = null) {
+        val t = label(text, 15f)
+        t.setPadding(dp(14), dp(12), dp(14), dp(12))
+        t.maxLines = 2
+        t.setOnClickListener { onClick() }
+        if (onLong != null) t.setOnLongClickListener { onLong(); true }
+        resultsBox.addView(t)
+    }
+
+    private fun favRow(key: String, icon: String, name: String) {
+        val f = prefs.fav(key)
+        if (f != null) {
+            addRow("$icon $name · ${f.name}", { goTo(f) }, { pendingFav = key; toast("Cherche la nouvelle adresse de $name") })
+        } else {
+            addRow("$icon $name · à définir", { pendingFav = key; toast("Tape l'adresse de $name puis choisis-la") })
+        }
+    }
+
+    private fun fillSuggestions() {
+        resultsBox.removeAllViews()
+        favRow("home", "🏠", "Domicile")
+        favRow("work", "💼", "Travail")
+        for (r in prefs.recents()) addRow("🕘 ${r.name}", { goTo(r) })
+        resultsBox.visibility = View.VISIBLE
+    }
+
+    private fun goTo(p: Place) {
+        resultsBox.visibility = View.GONE
+        hideKeyboard()
+        searchBox.setText(p.name)
+        setDestination(p.pt, p.name)
+    }
 
     private fun doSearch() {
         val q = searchBox.text.toString().trim()
         if (q.isEmpty()) return
-        (getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).hideSoftInputFromWindow(searchBox.windowToken, 0)
+        hideKeyboard()
         scope.launch {
             try {
                 val res = Geocoder.search(q)
                 resultsBox.removeAllViews()
-                if (res.isEmpty()) {
-                    val t = label("Aucun résultat", 15f)
-                    t.setPadding(dp(14), dp(12), dp(14), dp(12))
-                    resultsBox.addView(t)
-                }
+                if (res.isEmpty()) addRow("Aucun résultat", {})
                 for (p in res) {
-                    val t = label(p.name, 15f)
-                    t.setPadding(dp(14), dp(12), dp(14), dp(12))
-                    t.maxLines = 2
-                    t.setOnClickListener {
-                        resultsBox.visibility = View.GONE
-                        searchBox.setText(p.name.substringBefore(","))
-                        setDestination(p.pt, p.name.substringBefore(","))
-                    }
-                    resultsBox.addView(t)
+                    addRow(p.name, {
+                        val short = p.name.substringBefore(",")
+                        val place = Place(short, p.pt)
+                        val fav = pendingFav
+                        if (fav != null) {
+                            prefs.setFav(fav, place)
+                            pendingFav = null
+                            toast("Adresse enregistrée")
+                        }
+                        prefs.addRecent(place)
+                        goTo(place)
+                    })
                 }
                 resultsBox.visibility = View.VISIBLE
             } catch (e: Exception) {
@@ -513,6 +812,55 @@ class MainActivity : Activity() {
         if (dest != null) computeRoute(navigating)
     }
 
+    private fun routeOpts() = RouteOpts(
+        tolls = !prefs.bool("avoidTolls", false),
+        highways = !prefs.bool("avoidHighways", false),
+        ferries = !prefs.bool("avoidFerries", false)
+    )
+
+    /** Radars fixes situés à moins de 30 m de l'itinéraire. */
+    private suspend fun radarsOnRoute(pts: List<Pt>): List<Radar> = withContext(Dispatchers.Default) {
+        if (pts.size < 2 || fixedRadars.isEmpty()) return@withContext emptyList<Radar>()
+        val dense = ArrayList<Pt>()
+        for (i in 0 until pts.size - 1) {
+            val a = pts[i]
+            val b = pts[i + 1]
+            val n = max(1, (Geo.dist(a, b) / 40.0).toInt())
+            for (k in 0 until n) {
+                val t = k.toDouble() / n
+                dense.add(Pt(a.lat + (b.lat - a.lat) * t, a.lon + (b.lon - a.lon) * t))
+            }
+        }
+        dense.add(pts.last())
+        fun key(i: Long, j: Long): Long = (i shl 32) xor (j and 0xffffffffL)
+        val grid = HashMap<Long, ArrayList<Pt>>()
+        for (p in dense) {
+            val k = key(Math.floor(p.lat / 0.001).toLong(), Math.floor(p.lon / 0.001).toLong())
+            grid.getOrPut(k) { ArrayList() }.add(p)
+        }
+        val out = ArrayList<Radar>()
+        for (r in fixedRadars) {
+            val ci = Math.floor(r.pt.lat / 0.001).toLong()
+            val cj = Math.floor(r.pt.lon / 0.001).toLong()
+            var hit = false
+            for (di in -1L..1L) {
+                for (dj in -1L..1L) {
+                    val l = grid[key(ci + di, cj + dj)] ?: continue
+                    for (p in l) {
+                        if (Geo.dist(p, r.pt) < 30.0) {
+                            hit = true
+                            break
+                        }
+                    }
+                    if (hit) break
+                }
+                if (hit) break
+            }
+            if (hit) out.add(r)
+        }
+        out
+    }
+
     private fun computeRoute(keepNav: Boolean) {
         val d = dest ?: return
         val l = me
@@ -522,7 +870,26 @@ class MainActivity : Activity() {
         }
         scope.launch {
             try {
-                val r = Router.route(mode, Pt(l.latitude, l.longitude), d)
+                val from = Pt(l.latitude, l.longitude)
+                val opts = routeOpts()
+                var r = Router.route(mode, from, d, opts)
+                var radars = radarsOnRoute(r.pts)
+                var info = ""
+                if (prefs.bool("avoidRadars", false) && mode == "car" && radars.isNotEmpty()) {
+                    try {
+                        val r2 = Router.route(mode, from, d, opts, radars.map { it.pt })
+                        val left = radarsOnRoute(r2.pts)
+                        if (left.size < radars.size && r2.dur <= r.dur * 1.4 + 300) {
+                            info = "évite ${radars.size - left.size} radar(s)"
+                            r = r2
+                            radars = left
+                        } else {
+                            info = "radars inévitables"
+                        }
+                    } catch (e: Exception) {
+                        info = "détour impossible"
+                    }
+                }
                 route = r
                 stepIdx = 0
                 farSaid = -1
@@ -531,17 +898,21 @@ class MainActivity : Activity() {
                 style?.getSourceAs<GeoJsonSource>("route")?.setGeoJson(
                     Feature.fromGeometry(LineString.fromLngLats(r.pts.map { Point.fromLngLat(it.lon, it.lat) }))
                 )
-                panel.visibility = View.VISIBLE
-                panelInfo.text = summary(r.dur, r.dist) + (if (destName.isNotBlank()) "\n$destName" else "")
+                val extra = buildString {
+                    if (radars.isNotEmpty()) append(" · ${radars.size} radar(s) sur le trajet")
+                    if (info.isNotEmpty()) append(" ($info)")
+                }
+                etaView.text = "Arrivée ${eta(r.dur)}"
+                subView.text = summary(r.dur, r.dist) + extra
+                destView.text = destName
+                refreshPanel()
                 if (!keepNav) {
                     follow = false
                     val b = LatLngBounds.Builder()
                     r.pts.forEach { b.include(LatLng(it.lat, it.lon)) }
-                    map?.easeCamera(CameraUpdateFactory.newLatLngBounds(b.build(), dp(60), dp(140), dp(90), dp(240)), 900)
-                }
-                if (keepNav) {
-                    navBanner.visibility = View.VISIBLE
-                    navBanner.text = "Itinéraire recalculé"
+                    map?.easeCamera(CameraUpdateFactory.newLatLngBounds(b.build(), dp(50), dp(110), dp(50), dp(250)), 900)
+                } else {
+                    navDist.text = "Itinéraire recalculé"
                 }
             } catch (e: Exception) {
                 toast("Itinéraire impossible : ${e.message}")
@@ -549,6 +920,12 @@ class MainActivity : Activity() {
                 rerouting = false
             }
         }
+    }
+
+    private fun eta(sec: Double): String {
+        val c = Calendar.getInstance()
+        c.add(Calendar.SECOND, sec.roundToInt())
+        return SimpleDateFormat("HH:mm", Locale.FRANCE).format(c.time)
     }
 
     private fun summary(sec: Double, meters: Double): String {
@@ -562,15 +939,28 @@ class MainActivity : Activity() {
         stopNavigation()
         route = null
         dest = null
-        panel.visibility = View.GONE
         style?.getSourceAs<GeoJsonSource>("route")?.setGeoJson(FeatureCollection.fromFeatures(emptyList<Feature>()))
         style?.getSourceAs<GeoJsonSource>("dest")?.setGeoJson(FeatureCollection.fromFeatures(emptyList<Feature>()))
+        refreshPanel()
     }
 
     // ---------- Guidage ----------
 
     private fun speak(text: String) {
-        if (ttsReady) tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "nav")
+        if (ttsReady && !muted && prefs.bool("voice", true)) tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "nav")
+    }
+
+    private fun arrowFor(k: Int): String = when (k) {
+        15, 19, 21, 24, 3 -> "←"
+        16 -> "↖"
+        14 -> "↙"
+        10, 18, 20, 23, 2 -> "→"
+        9 -> "↗"
+        11 -> "↘"
+        12, 13 -> "↩"
+        26, 27 -> "↻"
+        4, 5, 6 -> "🏁"
+        else -> "↑"
     }
 
     private fun startNavigation() {
@@ -580,11 +970,17 @@ class MainActivity : Activity() {
         stepIdx = 0
         farSaid = -1
         nearSaid = -1
-        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        startBtn.text = "Arrêter"
-        navBanner.visibility = View.VISIBLE
-        navBanner.text = r.steps.firstOrNull()?.text ?: "Suivez l'itinéraire"
-        speak(r.steps.firstOrNull()?.text ?: "C'est parti")
+        if (prefs.bool("keepOn", true)) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        hideKeyboard()
+        resultsBox.visibility = View.GONE
+        map?.setPadding(0, dp(200), 0, dp(40))
+        val first = r.steps.firstOrNull()
+        navArrow.text = arrowFor(first?.kind ?: 1)
+        navDist.text = ""
+        navStreet.text = first?.text ?: "Suivez l'itinéraire"
+        speak(first?.text ?: "C'est parti")
+        refreshPanel()
+        applyCarMode()
         me?.let { moveCamera(it) }
     }
 
@@ -592,8 +988,9 @@ class MainActivity : Activity() {
         if (!navigating) return
         navigating = false
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        startBtn.text = "Démarrer"
-        navBanner.visibility = View.GONE
+        map?.setPadding(0, 0, 0, 0)
+        refreshPanel()
+        applyCarMode()
         map?.let { m ->
             val cp = m.cameraPosition
             m.animateCamera(CameraUpdateFactory.newCameraPosition(CameraPosition.Builder(cp).tilt(0.0).bearing(0.0).build()), 500)
@@ -609,7 +1006,6 @@ class MainActivity : Activity() {
         val r = route ?: return
         val p = Pt(loc.latitude, loc.longitude)
 
-        // Sortie d'itinéraire : recalcul après 3 positions consécutives trop éloignées
         if (Geo.distToRoute(p, r.pts) > 80.0) {
             offCount++
             if (offCount >= 3 && !rerouting) {
@@ -623,7 +1019,6 @@ class MainActivity : Activity() {
             offCount = 0
         }
 
-        // Avancement sur les manœuvres
         while (stepIdx + 1 < r.steps.size - 1 && Geo.dist(p, r.steps[stepIdx + 1].at) < 25.0) {
             stepIdx++
             farSaid = -1
@@ -632,7 +1027,6 @@ class MainActivity : Activity() {
         val next = r.steps.getOrNull(stepIdx + 1) ?: return
         val dNext = Geo.dist(p, next.at)
 
-        // Arrivée
         if (stepIdx + 1 >= r.steps.size - 1 && dNext < 30.0) {
             speak("Vous êtes arrivé à destination")
             toast("Arrivé à destination")
@@ -643,8 +1037,11 @@ class MainActivity : Activity() {
         var remain = dNext
         for (j in stepIdx + 1 until r.steps.size) remain += r.steps[j].dist
         val remTime = if (r.dist > 0) r.dur * remain / r.dist else 0.0
-        navBanner.text = "${if (dNext >= 1000) String.format(Locale.FRANCE, "%.1f km", dNext / 1000) else "${dNext.roundToInt()} m"} · ${next.text}"
-        panelInfo.text = summary(remTime, remain)
+        navArrow.text = arrowFor(next.kind)
+        navDist.text = if (dNext >= 1000) String.format(Locale.FRANCE, "%.1f km", dNext / 1000) else "${(dNext / 10).roundToInt() * 10} m"
+        navStreet.text = next.text
+        etaView.text = "Arrivée ${eta(remTime)}"
+        subView.text = summary(remTime, remain)
 
         val far = if (loc.speed > 16f) 600.0 else if (loc.speed > 8f) 350.0 else 150.0
         if (dNext < 60.0 && nearSaid != stepIdx) {
@@ -664,9 +1061,11 @@ class MainActivity : Activity() {
         val moving = loc.hasSpeed() && loc.speed > 3f && loc.hasBearing()
         var best: Radar? = null
         var bestD = Double.MAX_VALUE
-        val candidates = ArrayList<Radar>(fixedRadars.size / 20 + 8)
-        for (r in fixedRadars) {
-            if (Math.abs(r.pt.lat - p.lat) < 0.012 && Math.abs(r.pt.lon - p.lon) < 0.02) candidates.add(r)
+        val candidates = ArrayList<Radar>()
+        if (prefs.bool("showFixed", true)) {
+            for (r in fixedRadars) {
+                if (Math.abs(r.pt.lat - p.lat) < 0.012 && Math.abs(r.pt.lon - p.lon) < 0.02) candidates.add(r)
+            }
         }
         for (rep in allReports()) {
             if (Math.abs(rep.pt.lat - p.lat) < 0.012 && Math.abs(rep.pt.lon - p.lon) < 0.02)
@@ -690,18 +1089,20 @@ class MainActivity : Activity() {
             return
         }
         val lim = if (b.limit != null) " · limité à ${b.limit}" else ""
-        radarBanner.text = "${b.kind} dans ${bestD.roundToInt()} m$lim"
+        radarBanner.text = "⚠ ${b.kind} dans ${bestD.roundToInt()} m$lim"
         radarBanner.visibility = View.VISIBLE
         if (b.id !in alerted) {
             alerted.add(b.id)
-            val over = if (b.limit != null && kmh > b.limit + 2) ", vous dépassez la limite" else ""
-            speak("${b.kind} dans ${distSay(bestD)}$over")
+            if (prefs.bool("radarAlert", true)) {
+                val over = if (b.limit != null && kmh > b.limit + 2) ", vous dépassez la limite" else ""
+                speak("${b.kind} dans ${distSay(bestD)}$over")
+            }
         }
     }
 
     // ---------- Signalements ----------
 
-    private fun serverUrl(): String = prefs.getString("server", "") ?: ""
+    private fun serverUrl(): String = prefs.str("server", "")
 
     private fun reportDialog() {
         val l = me
@@ -715,7 +1116,6 @@ class MainActivity : Activity() {
                 val type = ReportClient.TYPES[i]
                 val at = Pt(l.latitude, l.longitude)
                 val id = "loc${System.currentTimeMillis()}"
-                // Visible tout de suite sur la carte, expire au bout de 4 h
                 localReports.add(Report(id, type, at, System.currentTimeMillis(), 1) to System.currentTimeMillis() + 4 * 3600 * 1000L)
                 refreshReportLayer()
                 val s = serverUrl()
@@ -731,21 +1131,6 @@ class MainActivity : Activity() {
                         }
                     }
                 }
-            }
-            .setNegativeButton("Annuler", null)
-            .show()
-    }
-
-    private fun serverDialog() {
-        val et = EditText(this)
-        et.setText(serverUrl())
-        et.hint = "https://mon-serveur.workers.dev"
-        AlertDialog.Builder(this)
-            .setTitle("Serveur de signalements")
-            .setView(et)
-            .setPositiveButton("Enregistrer") { _, _ ->
-                prefs.edit().putString("server", et.text.toString().trim()).apply()
-                startPolling()
             }
             .setNegativeButton("Annuler", null)
             .show()
@@ -767,5 +1152,340 @@ class MainActivity : Activity() {
                 delay(30000)
             }
         }
+    }
+
+    // ---------- Menu (tuiles colorées, bandeau en haut, comme l'appli IPTV) ----------
+
+    private fun closeMenu() {
+        menuView?.let { rootLayout.removeView(it) }
+        menuView = null
+        menuPage = null
+    }
+
+    private fun pageColor(page: String?): String = when (page) {
+        "dest" -> GREEN
+        "vehicle" -> ORANGE
+        "route" -> BLUE
+        "radar" -> RED
+        "guide" -> SLATE
+        else -> ORANGE_L
+    }
+
+    private fun pageTitle(page: String?): String = when (page) {
+        "dest" -> "Destinations"
+        "vehicle" -> "Véhicule"
+        "route" -> "Itinéraire"
+        "radar" -> "Radars"
+        "guide" -> "Guidage"
+        "about" -> "À propos"
+        else -> "DJSTEF GPS"
+    }
+
+    private fun showMenu(page: String?) {
+        menuView?.let { rootLayout.removeView(it) }
+        menuPage = page
+        val v = LinearLayout(this)
+        v.orientation = LinearLayout.VERTICAL
+        v.setBackgroundColor(Color.parseColor(BG))
+        v.isClickable = true
+
+        val bar = LinearLayout(this)
+        bar.orientation = LinearLayout.HORIZONTAL
+        bar.gravity = Gravity.CENTER_VERTICAL
+        bar.setBackgroundColor(Color.parseColor(BAR))
+        bar.setPadding(dp(16), topInset + dp(14), dp(16), dp(14))
+        val back = label(if (page == null) "✕" else "←", 26f, true)
+        back.setPadding(dp(4), 0, dp(14), 0)
+        back.setOnClickListener { if (page == null) closeMenu() else showMenu(null) }
+        bar.addView(back)
+        val col = LinearLayout(this)
+        col.orientation = LinearLayout.VERTICAL
+        col.addView(label(pageTitle(page), 22f, true, if (page == null) "#FFFFFF" else "#FFFFFF"))
+        if (page == null) col.addView(label("GPS · v$VERSION", 12f, false, "#9AA3B5"))
+        bar.addView(col, LinearLayout.LayoutParams(0, -2, 1f))
+        v.addView(bar, LinearLayout.LayoutParams(-1, -2))
+        val line = View(this)
+        line.setBackgroundColor(Color.parseColor(pageColor(page)))
+        v.addView(line, LinearLayout.LayoutParams(-1, dp(4)))
+
+        val scroll = ScrollView(this)
+        val content = LinearLayout(this)
+        content.orientation = LinearLayout.VERTICAL
+        content.setPadding(dp(14), dp(14), dp(14), dp(24) + bottomInset)
+        scroll.addView(content)
+        v.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
+
+        when (page) {
+            null -> homeTiles(content)
+            "dest" -> destPage(content)
+            "vehicle" -> vehiclePage(content)
+            "route" -> routePage(content)
+            "radar" -> radarPage(content)
+            "guide" -> guidePage(content)
+            else -> aboutPage(content)
+        }
+        rootLayout.addView(v, FrameLayout.LayoutParams(-1, -1))
+        menuView = v
+    }
+
+    private fun tile(parent: LinearLayout, page: String, icon: String, title: String, sub: String, color: String) {
+        val t = LinearLayout(this)
+        t.orientation = LinearLayout.VERTICAL
+        t.background = gradBg(color, 20)
+        t.setPadding(dp(16), dp(16), dp(16), dp(16))
+        t.gravity = Gravity.BOTTOM
+        t.addView(label(icon, 34f))
+        t.addView(label(title, 18f, true))
+        t.addView(label(sub, 12f, false, "#E3E8F2"))
+        t.setOnClickListener { showMenu(page) }
+        parent.addView(t, LinearLayout.LayoutParams(0, dp(140), 1f).also { it.setMargins(dp(5), dp(5), dp(5), dp(5)) })
+    }
+
+    private fun homeTiles(content: LinearLayout) {
+        val items = listOf(
+            arrayOf("dest", "📍", "Destinations", "Domicile, travail, récents", GREEN),
+            arrayOf("vehicle", "🚗", "Véhicule", "Modèle 3D, couleur, taille", ORANGE),
+            arrayOf("route", "🛣", "Itinéraire", "Péages, autoroutes, ferries", BLUE),
+            arrayOf("radar", "📡", "Radars", "Alertes, éviter, signalements", RED),
+            arrayOf("guide", "🔊", "Guidage", "Voix, vitesse, vue 3D", SLATE),
+            arrayOf("about", "ℹ", "À propos", "Version et sources", GREY)
+        )
+        var i = 0
+        while (i < items.size) {
+            val row = LinearLayout(this)
+            row.orientation = LinearLayout.HORIZONTAL
+            for (k in i until minOf(i + 2, items.size)) {
+                val it = items[k]
+                tile(row, it[0], it[1], it[2], it[3], it[4])
+            }
+            content.addView(row, LinearLayout.LayoutParams(-1, -2))
+            i += 2
+        }
+    }
+
+    private fun card(content: LinearLayout): LinearLayout {
+        val c = LinearLayout(this)
+        c.orientation = LinearLayout.VERTICAL
+        c.background = colorBg(CARD, 16)
+        c.setPadding(dp(14), dp(12), dp(14), dp(12))
+        content.addView(c, LinearLayout.LayoutParams(-1, -2).also { it.bottomMargin = dp(12) })
+        return c
+    }
+
+    private fun sectionTitle(parent: LinearLayout, text: String, color: String) {
+        val t = label(text, 13f, true, color)
+        t.setPadding(0, 0, 0, dp(8))
+        parent.addView(t)
+    }
+
+    private fun switchRow(parent: LinearLayout, title: String, sub: String, key: String, def: Boolean, onChange: (() -> Unit)? = null) {
+        val row = LinearLayout(this)
+        row.orientation = LinearLayout.HORIZONTAL
+        row.gravity = Gravity.CENTER_VERTICAL
+        row.setPadding(0, dp(8), 0, dp(8))
+        val col = LinearLayout(this)
+        col.orientation = LinearLayout.VERTICAL
+        col.addView(label(title, 16f, true))
+        if (sub.isNotEmpty()) col.addView(label(sub, 12f, false, "#9AA3B5"))
+        row.addView(col, LinearLayout.LayoutParams(0, -2, 1f))
+        val sw = Switch(this)
+        sw.isChecked = prefs.bool(key, def)
+        sw.setOnCheckedChangeListener { _, on ->
+            prefs.setBool(key, on)
+            onChange?.invoke()
+        }
+        row.addView(sw)
+        parent.addView(row)
+    }
+
+    private fun destPage(content: LinearLayout) {
+        val c = card(content)
+        sectionTitle(c, "FAVORIS", GREEN)
+        for ((key, icon, name) in listOf(Triple("home", "🏠", "Domicile"), Triple("work", "💼", "Travail"))) {
+            val f = prefs.fav(key)
+            val t = label(if (f != null) "$icon $name · ${f.name}" else "$icon $name · à définir", 16f)
+            t.setPadding(0, dp(10), 0, dp(10))
+            t.setOnClickListener {
+                if (f != null) {
+                    closeMenu()
+                    goTo(f)
+                } else {
+                    pendingFav = key
+                    closeMenu()
+                    searchBox.requestFocus()
+                    toast("Tape l'adresse de $name puis choisis-la")
+                }
+            }
+            t.setOnLongClickListener {
+                pendingFav = key
+                closeMenu()
+                toast("Cherche la nouvelle adresse de $name")
+                true
+            }
+            c.addView(t)
+        }
+        val c2 = card(content)
+        sectionTitle(c2, "RÉCENTS", GREEN)
+        val rec = prefs.recents()
+        if (rec.isEmpty()) c2.addView(label("Aucune destination pour l'instant", 14f, false, "#9AA3B5"))
+        for (r in rec) {
+            val t = label("🕘 ${r.name}", 16f)
+            t.setPadding(0, dp(10), 0, dp(10))
+            t.setOnClickListener {
+                closeMenu()
+                goTo(r)
+            }
+            c2.addView(t)
+        }
+    }
+
+    private fun vehiclePage(content: LinearLayout) {
+        val model = prefs.int("car", 0)
+        val colHex = prefs.str("carColor", CarSprites.COLORS[0])
+        val col = Color.parseColor(colHex)
+
+        val c = card(content)
+        sectionTitle(c, "APERÇU", ORANGE_L)
+        val prev = LinearLayout(this)
+        prev.orientation = LinearLayout.HORIZONTAL
+        prev.gravity = Gravity.CENTER
+        val rear = ImageView(this)
+        rear.setImageBitmap(CarSprites.drawRear(model, col))
+        val top = ImageView(this)
+        top.setImageBitmap(CarSprites.draw(model, col))
+        prev.addView(rear, LinearLayout.LayoutParams(0, dp(110), 1f))
+        prev.addView(top, LinearLayout.LayoutParams(0, dp(110), 1f))
+        c.addView(prev)
+        c.addView(label("Vue 3D de derrière en navigation · vue du dessus en 2D", 12f, false, "#9AA3B5"))
+
+        val c2 = card(content)
+        sectionTitle(c2, "MODÈLE", ORANGE_L)
+        val hs = HorizontalScrollView(this)
+        val row = LinearLayout(this)
+        row.orientation = LinearLayout.HORIZONTAL
+        for (i in CarSprites.NAMES.indices) {
+            val item = LinearLayout(this)
+            item.orientation = LinearLayout.VERTICAL
+            item.gravity = Gravity.CENTER
+            item.setPadding(dp(6), dp(6), dp(6), dp(6))
+            val g = GradientDrawable()
+            g.cornerRadius = dp(14).toFloat()
+            g.setColor(Color.parseColor(if (i == model) "#2A3550" else "#101A30"))
+            if (i == model) g.setStroke(dp(2), Color.parseColor(ORANGE_L))
+            item.background = g
+            val iv = ImageView(this)
+            iv.setImageBitmap(CarSprites.drawRear(i, col))
+            item.addView(iv, LinearLayout.LayoutParams(dp(90), dp(72)))
+            item.addView(label(CarSprites.NAMES[i], 12f, true))
+            item.setOnClickListener {
+                prefs.setInt("car", i)
+                applyCar()
+                showMenu("vehicle")
+            }
+            row.addView(item, LinearLayout.LayoutParams(-2, -2).also { it.rightMargin = dp(8) })
+        }
+        hs.addView(row)
+        c2.addView(hs)
+
+        val c3 = card(content)
+        sectionTitle(c3, "COULEUR", ORANGE_L)
+        val hs2 = HorizontalScrollView(this)
+        val crow = LinearLayout(this)
+        crow.orientation = LinearLayout.HORIZONTAL
+        for (hex in CarSprites.COLORS) {
+            val dot = View(this)
+            val g = GradientDrawable()
+            g.shape = GradientDrawable.OVAL
+            g.setColor(Color.parseColor(hex))
+            g.setStroke(dp(if (hex == colHex) 4 else 1), Color.parseColor(if (hex == colHex) "#FFFFFF" else "#55FFFFFF"))
+            dot.background = g
+            dot.setOnClickListener {
+                prefs.setStr("carColor", hex)
+                applyCar()
+                showMenu("vehicle")
+            }
+            crow.addView(dot, LinearLayout.LayoutParams(dp(44), dp(44)).also { it.rightMargin = dp(10) })
+        }
+        hs2.addView(crow)
+        c3.addView(hs2)
+
+        val c4 = card(content)
+        sectionTitle(c4, "TAILLE SUR LA CARTE", ORANGE_L)
+        val size = prefs.float("carSize", 1f)
+        val sizeLbl = label(String.format(Locale.FRANCE, "×%.1f", size), 16f, true)
+        c4.addView(sizeLbl)
+        val sb = SeekBar(this)
+        sb.max = 150
+        sb.progress = ((size - 0.5f) * 100).roundToInt().coerceIn(0, 150)
+        sb.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(s: SeekBar?, p: Int, fromUser: Boolean) {
+                val v = 0.5f + p / 100f
+                sizeLbl.text = String.format(Locale.FRANCE, "×%.1f", v)
+                if (fromUser) {
+                    prefs.setFloat("carSize", v)
+                    applyCarMode()
+                }
+            }
+            override fun onStartTrackingTouch(s: SeekBar?) {}
+            override fun onStopTrackingTouch(s: SeekBar?) {}
+        })
+        c4.addView(sb)
+    }
+
+    private fun routePage(content: LinearLayout) {
+        val c = card(content)
+        sectionTitle(c, "ÉVITER (voiture)", "#64B5F6")
+        switchRow(c, "Péages", "Privilégie les routes sans péage", "avoidTolls", false) { if (dest != null) computeRoute(navigating) }
+        switchRow(c, "Autoroutes", "Évite les voies rapides", "avoidHighways", false) { if (dest != null) computeRoute(navigating) }
+        switchRow(c, "Ferries", "Évite les bacs et traversées", "avoidFerries", false) { if (dest != null) computeRoute(navigating) }
+        val c2 = card(content)
+        c2.addView(label("Les options s'appliquent au prochain calcul d'itinéraire (ou tout de suite si un trajet est affiché).", 12f, false, "#9AA3B5"))
+    }
+
+    private fun radarPage(content: LinearLayout) {
+        val c = card(content)
+        sectionTitle(c, "ALERTES", "#EF5350")
+        switchRow(c, "Alertes vocales", "Annonce les radars à l'approche", "radarAlert", true)
+        switchRow(c, "Radars fixes sur la carte", "Données officielles data.gouv.fr", "showFixed", true) { applyRadarVisibility() }
+        val c2 = card(content)
+        sectionTitle(c2, "ITINÉRAIRE", "#EF5350")
+        switchRow(c2, "Éviter les radars", "Cherche un détour (voiture) sans radar fixe, si le trajet reste raisonnable", "avoidRadars", false) { if (dest != null) computeRoute(navigating) }
+        val c3 = card(content)
+        sectionTitle(c3, "SERVEUR DE SIGNALEMENTS", "#EF5350")
+        c3.addView(label("Radars mobiles, contrôles, dangers signalés par les utilisateurs.", 12f, false, "#9AA3B5"))
+        val et = EditText(this)
+        et.setText(serverUrl())
+        et.hint = "https://mon-serveur.workers.dev"
+        et.setHintTextColor(Color.parseColor("#6B7385"))
+        et.setTextColor(Color.WHITE)
+        et.setSingleLine(true)
+        c3.addView(et)
+        val save = button("Enregistrer", RED) {
+            prefs.setStr("server", et.text.toString().trim())
+            startPolling()
+            toast("Serveur enregistré")
+        }
+        c3.addView(save, LinearLayout.LayoutParams(-1, -2).also { it.topMargin = dp(8) })
+    }
+
+    private fun guidePage(content: LinearLayout) {
+        val c = card(content)
+        sectionTitle(c, "VOIX ET VITESSE", "#90A4AE")
+        switchRow(c, "Guidage vocal", "Consignes en français", "voice", true)
+        switchRow(c, "Limitations de vitesse", "Panneau de limite d'après OpenStreetMap", "showLimit", true) { refreshLimitView() }
+        switchRow(c, "Alerte de dépassement", "Prévient si tu dépasses la limite de plus de 3 km/h", "speedAlert", true)
+        val c2 = card(content)
+        sectionTitle(c2, "AFFICHAGE", "#90A4AE")
+        switchRow(c2, "Vue 3D en navigation", "Carte inclinée, voiture vue de derrière", "view3d", true) { applyCarMode() }
+        switchRow(c2, "Nord en haut", "Garde la carte fixe au lieu de tourner avec toi", "northUp", false) { applyCarMode() }
+        switchRow(c2, "Écran toujours allumé", "Pendant le guidage", "keepOn", true)
+    }
+
+    private fun aboutPage(content: LinearLayout) {
+        val c = card(content)
+        c.addView(label("DJSTEF GPS · v$VERSION", 18f, true))
+        c.addView(label("Carte : OpenStreetMap et OpenFreeMap\nItinéraires : Valhalla / OSRM (OpenStreetMap)\nRadars fixes : data.gouv.fr (Licence Ouverte 2.0)\nLimitations de vitesse : OpenStreetMap (Overpass)\nAdresses : Nominatim", 13f, false, "#C0C7D6"))
+        val c2 = card(content)
+        c2.addView(label("Les limitations de vitesse et les radars peuvent être incomplets ou périmés : respecte toujours la signalisation sur la route.", 13f, false, "#9AA3B5"))
     }
 }
