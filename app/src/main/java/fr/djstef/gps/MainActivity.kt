@@ -76,7 +76,7 @@ import kotlin.math.roundToInt
 class MainActivity : Activity() {
 
     companion object {
-        const val VERSION = "0.18"
+        const val VERSION = "0.19"
         const val STYLE_URL = "https://tiles.openfreemap.org/styles/liberty"
 
         // Palette (même esprit que l'appli IPTV : fond bleu nuit, une couleur par section)
@@ -147,6 +147,9 @@ class MainActivity : Activity() {
     private var me: Location? = null
     private var lastBearing = 0f
     private var follow = true
+    private var zoomBoost = 0.0
+    private var zoomInBtn: View? = null
+    private var zoomOutBtn: View? = null
     private var navigating = false
     private var mode = "car"
     private var dest: Pt? = null
@@ -415,7 +418,14 @@ class MainActivity : Activity() {
         muteBtn = circleBtn("🔊", 52) { toggleMute() }
         viewBtn = circleBtn("3D", 52) { toggleView() }
         trafficBtn = circleBtn("🚦", 52) { toggleTraffic() }
-        for (b in listOf(recBtn, repBtn, trafficBtn, muteBtn, viewBtn)) {
+        val zin = circleBtn("＋", 52) { adjustZoom(0.5) }
+        zin.setOnLongClickListener { prefs.setFloat("navZoom", 0f); toast("Zoom automatique selon la vitesse"); me?.let { moveCamera(it) }; true }
+        val zout = circleBtn("－", 52) { adjustZoom(-0.5) }
+        zin.visibility = View.GONE
+        zout.visibility = View.GONE
+        zoomInBtn = zin
+        zoomOutBtn = zout
+        for (b in listOf(recBtn, repBtn, trafficBtn, zin, zout, muteBtn, viewBtn)) {
             (b.layoutParams as LinearLayout.LayoutParams).topMargin = dp(10)
             side.addView(b)
         }
@@ -529,6 +539,8 @@ class MainActivity : Activity() {
         searchRow.visibility = if (navigating) View.GONE else View.VISIBLE
         navBanner.visibility = if (navigating) View.VISIBLE else View.GONE
         muteBtn.visibility = if (navigating) View.VISIBLE else View.GONE
+        zoomInBtn?.visibility = if (navigating) View.VISIBLE else View.GONE
+        zoomOutBtn?.visibility = if (navigating) View.VISIBLE else View.GONE
         viewBtn.visibility = if (navigating) View.VISIBLE else View.GONE
         viewBtn.text = if (prefs.bool("view3d", true)) "3D" else "2D"
         muteBtn.text = if (muted) "🔇" else "🔊"
@@ -635,6 +647,23 @@ class MainActivity : Activity() {
         applyCarMode()
     }
 
+    /** Taille d'icône qui grandit avec le zoom de la carte (référence : zoom 17,3). */
+    private fun zoomScale(base: Float): Expression = Expression.interpolate(
+        Expression.linear(), Expression.zoom(),
+        Expression.stop(14, base * 0.35f), Expression.stop(16, base * 0.65f), Expression.stop(17.3, base),
+        Expression.stop(18, base * 1.25f), Expression.stop(19, base * 1.7f), Expression.stop(20, base * 2.2f)
+    )
+
+    private fun adjustZoom(delta: Double) {
+        val m = map ?: return
+        val cur = prefs.float("navZoom", 0f).toDouble().takeIf { it > 0 } ?: (m.cameraPosition.zoom - zoomBoost)
+        val z = ((Math.round((cur + delta) * 2) / 2.0)).coerceIn(14.0, 19.5)
+        prefs.setFloat("navZoom", z.toFloat())
+        toast(String.format(Locale.FRANCE, "Zoom %.1f", z))
+        follow = true
+        me?.let { moveCamera(it) }
+    }
+
     private fun applyCarMode() {
         val layer = style?.getLayerAs<SymbolLayer>("me-layer") ?: return
         val size = prefs.float("carSize", 1f)
@@ -642,7 +671,7 @@ class MainActivity : Activity() {
             // Vue de derrière, « debout » face à la caméra inclinée
             layer.setProperties(
                 PropertyFactory.iconImage("car-rear"),
-                PropertyFactory.iconSize(0.5f * size),
+                PropertyFactory.iconSize(zoomScale(0.5f * size)),
                 PropertyFactory.iconAnchor(Property.ICON_ANCHOR_BOTTOM),
                 PropertyFactory.iconRotationAlignment(Property.ICON_ROTATION_ALIGNMENT_VIEWPORT),
                 PropertyFactory.iconPitchAlignment(Property.ICON_PITCH_ALIGNMENT_VIEWPORT),
@@ -652,7 +681,7 @@ class MainActivity : Activity() {
             // Vue du dessus, posée sur la carte et orientée selon le cap
             layer.setProperties(
                 PropertyFactory.iconImage("car-top"),
-                PropertyFactory.iconSize(0.4f * size),
+                PropertyFactory.iconSize(zoomScale(0.4f * size)),
                 PropertyFactory.iconAnchor(Property.ICON_ANCHOR_CENTER),
                 PropertyFactory.iconRotationAlignment(Property.ICON_ROTATION_ALIGNMENT_MAP),
                 PropertyFactory.iconPitchAlignment(Property.ICON_PITCH_ALIGNMENT_MAP),
@@ -705,8 +734,10 @@ class MainActivity : Activity() {
         val b = CameraPosition.Builder().target(LatLng(loc.latitude, loc.longitude))
         if (navigating) {
             val kmh = if (loc.hasSpeed()) loc.speed * 3.6 else 0.0
-            val z = if (kmh < 30) 18.0 else if (kmh < 70) 17.3 else if (kmh < 100) 16.6 else 16.0
-            b.zoom(z)
+            val manual = prefs.float("navZoom", 0f).toDouble()
+            val auto = if (kmh < 30) 18.0 else if (kmh < 70) 17.3 else if (kmh < 100) 16.6 else 16.0
+            // Zoom choisi (ou automatique selon la vitesse) + zoom d'approche des ronds-points et virages
+            b.zoom(((if (manual > 0) manual else auto) + zoomBoost).coerceIn(13.0, 20.5))
             b.tilt(if (prefs.bool("view3d", true)) 60.0 else 0.0)
             b.bearing(if (prefs.bool("northUp", false)) 0.0 else lastBearing.toDouble())
         } else {
@@ -1094,6 +1125,7 @@ class MainActivity : Activity() {
     private fun stopNavigation() {
         if (!navigating) return
         navigating = false
+        zoomBoost = 0.0
         NavBridge.navigating = false
         NavBridge.route = null
         NavBridge.changed()
@@ -1153,6 +1185,10 @@ class MainActivity : Activity() {
         navStreet.text = next.text
         etaView.text = "Arrivée ${eta(remTime)}"
         subView.text = summary(remTime, remain)
+        // Zoom d'approche : rond-point (dès 300 m) et virages (dès 150 m), puis retour au zoom choisi
+        val roundabout = next.kind == 26 || next.kind == 27
+        val turn = next.kind in setOf(15, 19, 21, 24, 3, 16, 14, 10, 18, 20, 23, 2, 9, 11, 12, 13)
+        zoomBoost = if (roundabout && dNext < 300.0) 1.3 else if (turn && dNext < 150.0) 0.9 else 0.0
         NavBridge.nextKind = next.kind
         NavBridge.nextText = next.text
         NavBridge.nextName = next.name
