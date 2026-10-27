@@ -76,8 +76,9 @@ import kotlin.math.roundToInt
 class MainActivity : Activity() {
 
     companion object {
-        const val VERSION = "0.19"
+        const val VERSION = "0.20"
         const val STYLE_URL = "https://tiles.openfreemap.org/styles/liberty"
+        const val STYLE_DARK = "https://tiles.openfreemap.org/styles/dark"
 
         // Palette (même esprit que l'appli IPTV : fond bleu nuit, une couleur par section)
         const val BG = "#0B1220"
@@ -148,6 +149,21 @@ class MainActivity : Activity() {
     private var lastBearing = 0f
     private var follow = true
     private var zoomBoost = 0.0
+    private val vias = ArrayList<Place>()
+    private var pendingVia = false
+    private var alts: List<Route> = emptyList()
+    private var altIdx = 0
+    private lateinit var altRow: LinearLayout
+    private lateinit var viaBtn: TextView
+    private var lastBeep = 0L
+    private val tone by lazy { android.media.ToneGenerator(android.media.AudioManager.STREAM_MUSIC, 90) }
+    private var styleNight = false
+    private var lastThemeCheck = 0L
+    private var listenersAdded = false
+    private var trafficEta: Pair<Double, Long>? = null
+    private var trafficDelay = 0.0
+    private var lastEtaFetch = 0L
+    private var etaBusy = false
     private var zoomInBtn: View? = null
     private var zoomOutBtn: View? = null
     private var navigating = false
@@ -313,6 +329,29 @@ class MainActivity : Activity() {
         return t
     }
 
+    private fun startVoice() {
+        try {
+            val i = android.content.Intent(android.speech.RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
+                .putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE_MODEL, android.speech.RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                .putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE, "fr-FR")
+                .putExtra(android.speech.RecognizerIntent.EXTRA_PROMPT, "Où allez-vous ?")
+            startActivityForResult(i, 77)
+        } catch (e: Exception) {
+            toast("Reconnaissance vocale indisponible sur cet appareil")
+        }
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: android.content.Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == 77 && resultCode == RESULT_OK) {
+            val t = data?.getStringArrayListExtra(android.speech.RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()
+            if (!t.isNullOrBlank()) {
+                searchBox.setText(t)
+                doSearch()
+            }
+        }
+    }
+
     private fun toast(s: String) = Toast.makeText(this, s, Toast.LENGTH_LONG).show()
 
     private fun hideKeyboard() {
@@ -331,7 +370,8 @@ class MainActivity : Activity() {
             map = m
             m.cameraPosition = CameraPosition.Builder().target(LatLng(46.6, 2.5)).zoom(5.0).build()
             m.uiSettings.isCompassEnabled = false
-            m.setStyle(Style.Builder().fromUri(STYLE_URL)) { st -> onStyleReady(m, st) }
+            styleNight = wantNight()
+            m.setStyle(Style.Builder().fromUri(if (styleNight) STYLE_DARK else STYLE_URL)) { st -> onStyleReady(m, st) }
         }
 
         // --- Haut : recherche, résultats, consigne, alerte radar ---
@@ -358,6 +398,9 @@ class MainActivity : Activity() {
         searchBox.setOnFocusChangeListener { _, has -> if (has && searchBox.text.isNullOrBlank()) fillSuggestions() }
         searchBox.setOnClickListener { if (searchBox.text.isNullOrBlank()) fillSuggestions() }
         searchRow.addView(searchBox, LinearLayout.LayoutParams(0, -2, 1f))
+        val micBtn = circleBtn("🎤", 48) { startVoice() }
+        (micBtn.layoutParams as LinearLayout.LayoutParams).leftMargin = dp(8)
+        searchRow.addView(micBtn)
         val menuBtn = circleBtn("☰", 48) { showMenu(null) }
         (menuBtn.layoutParams as LinearLayout.LayoutParams).leftMargin = dp(8)
         searchRow.addView(menuBtn)
@@ -390,7 +433,7 @@ class MainActivity : Activity() {
         navCol.orientation = LinearLayout.VERTICAL
         navDist = label("", 28f, true)
         navStreet = label("", 16f, false, "#E8F5E9")
-        navStreet.maxLines = 2
+        navStreet.maxLines = 3
         navCol.addView(navDist)
         navCol.addView(navStreet)
         navBanner.addView(navCol, LinearLayout.LayoutParams(0, -2, 1f).also { it.leftMargin = dp(8) })
@@ -462,6 +505,10 @@ class MainActivity : Activity() {
         panel.addView(etaView)
         panel.addView(subView)
         panel.addView(destView)
+        altRow = LinearLayout(this)
+        altRow.orientation = LinearLayout.HORIZONTAL
+        altRow.visibility = View.GONE
+        panel.addView(altRow, LinearLayout.LayoutParams(-1, -2).also { it.topMargin = dp(8) })
 
         modeRow = LinearLayout(this)
         modeRow.orientation = LinearLayout.HORIZONTAL
@@ -480,6 +527,19 @@ class MainActivity : Activity() {
         actions.addView(startBtn, LinearLayout.LayoutParams(0, -2, 2f).also { it.rightMargin = dp(6) })
         actions.addView(cancelBtn, LinearLayout.LayoutParams(0, -2, 1f))
         panel.addView(actions, LinearLayout.LayoutParams(-1, -2).also { it.topMargin = dp(10) })
+        val tools = LinearLayout(this)
+        tools.orientation = LinearLayout.HORIZONTAL
+        viaBtn = button("＋ Étape", GREY) { addViaStart() }
+        viaBtn.textSize = 13f
+        viaBtn.setOnLongClickListener { vias.clear(); toast("Étapes retirées"); computeRoute(navigating); true }
+        val favBtn = button("⭐ Favori", GREY) { addFavoriteCurrent() }
+        favBtn.textSize = 13f
+        val shareBtn = button("↗ Partager", GREY) { shareTrip() }
+        shareBtn.textSize = 13f
+        tools.addView(viaBtn, LinearLayout.LayoutParams(0, -2, 1f).also { it.rightMargin = dp(6) })
+        tools.addView(favBtn, LinearLayout.LayoutParams(0, -2, 1f).also { it.rightMargin = dp(6) })
+        tools.addView(shareBtn, LinearLayout.LayoutParams(0, -2, 1f))
+        panel.addView(tools, LinearLayout.LayoutParams(-1, -2).also { it.topMargin = dp(8) })
         bottomBox.addView(panel, LinearLayout.LayoutParams(-1, -2))
         creditView = label(Lufop.CREDIT + "\nhttps://lufop.net", 10f, false, "#C0C7D6")
         creditView.gravity = Gravity.END
@@ -533,6 +593,7 @@ class MainActivity : Activity() {
         panel.visibility = if (route != null) View.VISIBLE else View.GONE
         modeRow.visibility = if (navigating) View.GONE else View.VISIBLE
         cancelBtn.visibility = if (navigating) View.GONE else View.VISIBLE
+        viaBtn.visibility = if (navigating) View.GONE else View.VISIBLE
         startBtn.text = if (navigating) "Arrêter" else "Démarrer"
         startBtn.background = glossBtn(if (navigating) RED else GREEN)
         trafficBtn.alpha = if (prefs.bool("traffic", false)) 1f else 0.55f
@@ -615,21 +676,73 @@ class MainActivity : Activity() {
         )
         applyCar()
         applyRadarVisibility()
+        setupSatellite()
         setupTraffic()
         setupPoiLayers()
 
-        m.addOnMapLongClickListener { ll ->
-            setDestination(Pt(ll.latitude, ll.longitude), "Point choisi sur la carte")
-            true
-        }
-        m.addOnCameraMoveStartedListener { reason ->
-            if (reason == MapLibreMap.OnCameraMoveStartedListener.REASON_API_GESTURE) follow = false
+        if (!listenersAdded) {
+            listenersAdded = true
+            m.addOnMapLongClickListener { ll ->
+                vias.clear()
+                setDestination(Pt(ll.latitude, ll.longitude), "Point choisi sur la carte")
+                true
+            }
+            m.addOnCameraMoveStartedListener { reason ->
+                if (reason == MapLibreMap.OnCameraMoveStartedListener.REASON_API_GESTURE) follow = false
+            }
         }
         applyMapMargins()
         refreshRadarLayer()
         refreshReportLayer()
+        redrawRoute()
         me?.let { updateMeLayer(it) }
         me?.let { moveCamera(it, true) }
+    }
+
+    private fun redrawRoute() {
+        val st = style ?: return
+        route?.let { r ->
+            st.getSourceAs<GeoJsonSource>("route")?.setGeoJson(
+                Feature.fromGeometry(LineString.fromLngLats(r.pts.map { Point.fromLngLat(it.lon, it.lat) }))
+            )
+        }
+        dest?.let { st.getSourceAs<GeoJsonSource>("dest")?.setGeoJson(point(it)) }
+    }
+
+    // --- Fond satellite et thème jour/nuit ---
+
+    private fun setupSatellite() {
+        val st = style ?: return
+        try {
+            if (st.getSource("sat") == null) {
+                val ts = TileSet("2.2.0", "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}")
+                ts.setMaxZoom(19f)
+                st.addSource(RasterSource("sat", ts, 256))
+                st.addLayerBelow(RasterLayer("sat-layer", "sat"), "route-layer")
+            }
+            applySatellite()
+        } catch (e: Exception) {
+        }
+    }
+
+    private fun applySatellite() {
+        val vis = if (prefs.bool("satellite", false)) Property.VISIBLE else Property.NONE
+        style?.getLayerAs<RasterLayer>("sat-layer")?.setProperties(PropertyFactory.visibility(vis))
+    }
+
+    private fun wantNight(): Boolean = when (prefs.str("theme", "auto")) {
+        "night" -> true
+        "day" -> false
+        else -> Sun.isNight(me?.latitude ?: 46.6, me?.longitude ?: 2.5)
+    }
+
+    private fun checkTheme() {
+        val m = map ?: return
+        if (style == null) return
+        val n = wantNight()
+        if (n == styleNight) return
+        styleNight = n
+        m.setStyle(Style.Builder().fromUri(if (n) STYLE_DARK else STYLE_URL)) { st -> onStyleReady(m, st) }
     }
 
     // --- Voiture sur la carte ---
@@ -803,6 +916,14 @@ class MainActivity : Activity() {
             lastSpeedWarn = now
             speak("Attention, vitesse limitée à $lim")
         }
+        if (over && prefs.bool("speedBeep", true) && !muted && now - lastBeep > 3000) {
+            lastBeep = now
+            try { tone.startTone(android.media.ToneGenerator.TONE_PROP_BEEP2, 250) } catch (_: Exception) {}
+        }
+        if (now - lastThemeCheck > 60000) {
+            lastThemeCheck = now
+            checkTheme()
+        }
         checkRadars(loc, kmh)
         maybeFetchLufop(loc)
         if (navigating) {
@@ -873,15 +994,85 @@ class MainActivity : Activity() {
         resultsBox.removeAllViews()
         favRow("home", "🏠", "Domicile")
         favRow("work", "💼", "Travail")
+        for (f in prefs.favorites()) addRow("⭐ ${f.name}", { goTo(f) }, { prefs.removeFavorite(f); toast("Favori retiré"); fillSuggestions() })
         for (r in prefs.recents()) addRow("🕘 ${r.name}", { goTo(r) })
+        for ((ico, ttl, phrase) in listOf(
+            Triple("🍴", "Restaurants", "restaurant"), Triple("💊", "Pharmacies", "pharmacy"), Triple("🏨", "Hôtels", "hotel"),
+            Triple("🏕", "Campings", "camp site"), Triple("⚡", "Bornes de recharge", "charging station"),
+            Triple("🛒", "Supermarchés", "supermarket"), Triple("🥖", "Boulangeries", "bakery")
+        )) addRow("$ico $ttl autour de moi", { nearby(ttl, phrase) })
         setResults(true)
     }
 
     private fun goTo(p: Place) {
+        if (pendingVia) {
+            pendingVia = false
+            searchBox.hint = "Où allez-vous ?"
+            searchBox.setText(destName)
+            setResults(false)
+            hideKeyboard()
+            vias.add(p)
+            toast("Étape ajoutée : ${p.name.substringBefore(",")}")
+            computeRoute(navigating)
+            return
+        }
+        vias.clear()
         setResults(false)
         hideKeyboard()
         searchBox.setText(p.name)
         setDestination(p.pt, p.name)
+    }
+
+    private fun addViaStart() {
+        if (dest == null) return
+        pendingVia = true
+        searchBox.hint = "Étape : où t'arrêter ?"
+        searchBox.setText("")
+        searchBox.requestFocus()
+        fillSuggestions()
+    }
+
+    private fun addFavoriteCurrent() {
+        val d = dest ?: return
+        prefs.addFavorite(Place(destName.substringBefore(","), d))
+        toast("Ajouté aux favoris")
+    }
+
+    private fun shareTrip() {
+        val d = dest ?: return
+        val sec = if (navigating) NavBridge.remainSec else (route?.dur ?: 0.0)
+        val msg = buildString {
+            append("Je vais à ${destName.substringBefore(",")}")
+            if (sec > 0) append(", arrivée vers ${eta(sec)}")
+            append(" — https://www.openstreetmap.org/?mlat=${d.lat}&mlon=${d.lon}#map=17/${d.lat}/${d.lon}")
+        }
+        val i = android.content.Intent(android.content.Intent.ACTION_SEND).setType("text/plain")
+            .putExtra(android.content.Intent.EXTRA_TEXT, msg)
+        startActivity(android.content.Intent.createChooser(i, "Partager mon trajet"))
+    }
+
+    private fun nearby(title: String, phrase: String) {
+        val l = me
+        if (l == null) {
+            toast("Position GPS en attente...")
+            return
+        }
+        toast("Recherche : $title…")
+        scope.launch {
+            try {
+                val res = Nearby.category(Pt(l.latitude, l.longitude), phrase)
+                resultsBox.removeAllViews()
+                if (res.isEmpty()) addRow("Aucun résultat à proximité", {})
+                for (pl in res) {
+                    val d = Geo.dist(Pt(l.latitude, l.longitude), pl.pt)
+                    val dTxt = if (d >= 1000) String.format(Locale.FRANCE, "%.1f km", d / 1000) else "${d.roundToInt()} m"
+                    addRow("${pl.name} · $dTxt", { prefs.addRecent(Place(pl.name.substringBefore(","), pl.pt)); goTo(Place(pl.name.substringBefore(","), pl.pt)) })
+                }
+                setResults(true)
+            } catch (e: Exception) {
+                toast("Recherche impossible : ${e.message}")
+            }
+        }
     }
 
     private fun doSearch() {
@@ -990,17 +1181,20 @@ class MainActivity : Activity() {
             try {
                 val from = Pt(l.latitude, l.longitude)
                 val opts = routeOpts()
-                var r = Router.route(mode, from, d, opts)
+                val viaList = vias.map { Via(it.pt, true) }
+                var list = Router.routes(mode, from, d, opts, emptyList(), viaList, if (mode == "car" && viaList.isEmpty() && !keepNav) 2 else 0)
+                var r = list[0]
                 var radars = radarsOnRoute(r.pts)
                 var info = ""
                 if (prefs.bool("avoidRadars", false) && mode == "car" && radars.isNotEmpty()) {
                     try {
-                        val r2 = Router.route(mode, from, d, opts, radars.map { it.pt })
+                        val r2 = Router.route(mode, from, d, opts, radars.map { it.pt }, viaList)
                         val left = radarsOnRoute(r2.pts)
                         if (left.size < radars.size && r2.dur <= r.dur * 1.4 + 300) {
                             info = "évite ${radars.size - left.size} radar(s)"
                             r = r2
                             radars = left
+                            list = listOf(r2)
                         } else {
                             info = "radars inévitables"
                         }
@@ -1008,40 +1202,97 @@ class MainActivity : Activity() {
                         info = "détour impossible"
                     }
                 }
-                route = r
-                if (navigating) NavBridge.route = r
-                stepIdx = 0
-                farSaid = -1
-                nearSaid = -1
-                offCount = 0
-                style?.getSourceAs<GeoJsonSource>("route")?.setGeoJson(
-                    Feature.fromGeometry(LineString.fromLngLats(r.pts.map { Point.fromLngLat(it.lon, it.lat) }))
-                )
-                val extra = buildString {
-                    if (radars.isNotEmpty()) append(" · ${radars.size} radar(s) sur le trajet")
-                    if (info.isNotEmpty()) append(" ($info)")
-                }
-                etaView.text = "Arrivée ${eta(r.dur)}"
-                subView.text = summary(r.dur, r.dist) + extra
-                destView.text = destName
-                refreshPanel()
-                if (!keepNav) {
-                    follow = false
-                    val b = LatLngBounds.Builder()
-                    r.pts.forEach { b.include(LatLng(it.lat, it.lon)) }
-                    map?.easeCamera(CameraUpdateFactory.newLatLngBounds(b.build(), dp(50), dp(110), dp(50), dp(250)), 900)
-                } else {
-                    navDist.text = "Itinéraire recalculé"
-                }
-                if (!keepNav && autoStart) {
-                    autoStart = false
-                    startNavigation()
-                }
+                alts = list
+                altIdx = 0
+                showRoute(r, radars, info, keepNav, true)
+                fetchTrafficEta(from, d, true)
             } catch (e: Exception) {
                 autoStart = false
                 toast("Itinéraire impossible : ${e.message}")
             } finally {
                 rerouting = false
+            }
+        }
+    }
+
+    private fun showRoute(r: Route, radars: List<Radar>, info: String, keepNav: Boolean, fit: Boolean) {
+        route = r
+        if (navigating) NavBridge.route = r
+        stepIdx = 0
+        farSaid = -1
+        nearSaid = -1
+        offCount = 0
+        trafficEta = null
+        style?.getSourceAs<GeoJsonSource>("route")?.setGeoJson(
+            Feature.fromGeometry(LineString.fromLngLats(r.pts.map { Point.fromLngLat(it.lon, it.lat) }))
+        )
+        val extra = buildString {
+            if (radars.isNotEmpty()) append(" · ${radars.size} radar(s) sur le trajet")
+            if (info.isNotEmpty()) append(" ($info)")
+        }
+        etaView.text = "Arrivée ${eta(r.dur)}"
+        subView.text = summary(r.dur, r.dist) + extra
+        destView.text = destName + (if (vias.isNotEmpty()) " · via " + vias.joinToString(", ") { it.name.substringBefore(",") } else "")
+        refreshAlts()
+        refreshPanel()
+        if (fit && !keepNav) {
+            follow = false
+            val b = LatLngBounds.Builder()
+            r.pts.forEach { b.include(LatLng(it.lat, it.lon)) }
+            map?.easeCamera(CameraUpdateFactory.newLatLngBounds(b.build(), dp(50), dp(110), dp(50), dp(250)), 900)
+        } else if (keepNav) {
+            navDist.text = "Itinéraire recalculé"
+        }
+        if (!keepNav && autoStart) {
+            autoStart = false
+            startNavigation()
+        }
+    }
+
+    private fun refreshAlts() {
+        altRow.removeAllViews()
+        if (alts.size < 2 || navigating) {
+            altRow.visibility = View.GONE
+            return
+        }
+        altRow.visibility = View.VISIBLE
+        for ((i, r) in alts.withIndex()) {
+            val b = button("${i + 1} · ${(r.dur / 60).roundToInt()} min · ${String.format(Locale.FRANCE, "%.0f", r.dist / 1000)} km", GREY) { selectAlt(i) }
+            b.textSize = 12f
+            b.background = glossBtn(if (i == altIdx) ORANGE_L else GREY)
+            b.setTextColor(Color.parseColor(if (i == altIdx) "#0B1220" else "#FFFFFF"))
+            altRow.addView(b, LinearLayout.LayoutParams(0, -2, 1f).also { it.rightMargin = dp(6) })
+        }
+    }
+
+    private fun selectAlt(i: Int) {
+        val r = alts.getOrNull(i) ?: return
+        altIdx = i
+        scope.launch {
+            val radars = radarsOnRoute(r.pts)
+            showRoute(r, radars, "", false, false)
+        }
+    }
+
+    /** Durée avec trafic (TomTom) sur le trajet restant, si la clé TomTom est renseignée. */
+    private fun fetchTrafficEta(from: Pt, to: Pt, preview: Boolean) {
+        val key = prefs.str("tomtomKey", "")
+        if (key.isBlank() || etaBusy) return
+        etaBusy = true
+        lastEtaFetch = System.currentTimeMillis()
+        scope.launch {
+            try {
+                val (sec, delay) = TomTomEta.eta(key, from, to)
+                trafficEta = Pair(sec, System.currentTimeMillis())
+                trafficDelay = delay
+                if (preview && !navigating) {
+                    etaView.text = "Arrivée ${eta(sec)}"
+                    val r = route
+                    if (r != null) subView.text = summary(sec, r.dist) + (if (delay >= 120) " · trafic +${(delay / 60).roundToInt()} min" else " · trafic fluide")
+                }
+            } catch (_: Exception) {
+            } finally {
+                etaBusy = false
             }
         }
     }
@@ -1063,6 +1314,9 @@ class MainActivity : Activity() {
         stopNavigation()
         route = null
         dest = null
+        vias.clear()
+        alts = emptyList()
+        pendingVia = false
         style?.getSourceAs<GeoJsonSource>("route")?.setGeoJson(FeatureCollection.fromFeatures(emptyList<Feature>()))
         style?.getSourceAs<GeoJsonSource>("dest")?.setGeoJson(FeatureCollection.fromFeatures(emptyList<Feature>()))
         refreshPanel()
@@ -1166,6 +1420,7 @@ class MainActivity : Activity() {
             stepIdx++
             farSaid = -1
             nearSaid = -1
+            if (r.steps[stepIdx].kind in 4..6 && vias.isNotEmpty()) vias.removeAt(0)
         }
         val next = r.steps.getOrNull(stepIdx + 1) ?: return
         val dNext = Geo.dist(p, next.at)
@@ -1182,9 +1437,13 @@ class MainActivity : Activity() {
         val remTime = if (r.dist > 0) r.dur * remain / r.dist else 0.0
         navArrow.text = arrowFor(next.kind)
         navDist.text = if (dNext >= 1000) String.format(Locale.FRANCE, "%.1f km", dNext / 1000) else "${(dNext / 10).roundToInt() * 10} m"
-        navStreet.text = next.text
-        etaView.text = "Arrivée ${eta(remTime)}"
-        subView.text = summary(remTime, remain)
+        navStreet.text = if (next.sign.isNotBlank()) next.sign + "\n" + next.text else next.text
+        val nowMs = System.currentTimeMillis()
+        if (nowMs - lastEtaFetch > 180000) dest?.let { fetchTrafficEta(p, it, false) }
+        val te = trafficEta
+        val shown = if (te != null && nowMs - te.second < 360000) te.first else remTime
+        etaView.text = "Arrivée ${eta(shown)}"
+        subView.text = summary(shown, remain) + (if (te != null && trafficDelay >= 120) " · trafic +${(trafficDelay / 60).roundToInt()} min" else "")
         // Zoom d'approche : rond-point (dès 300 m) et virages (dès 150 m), puis retour au zoom choisi
         val roundabout = next.kind == 26 || next.kind == 27
         val turn = next.kind in setOf(15, 19, 21, 24, 3, 16, 14, 10, 18, 20, 23, 2, 9, 11, 12, 13)
@@ -2141,17 +2400,49 @@ class MainActivity : Activity() {
         switchRow(c, "Guidage vocal", "Consignes en français", "voice", true)
         switchRow(c, "Limitations de vitesse", "Panneau de limite d'après OpenStreetMap", "showLimit", true) { refreshLimitView() }
         switchRow(c, "Alerte de dépassement", "Prévient si tu dépasses la limite de plus de 3 km/h", "speedAlert", true)
+        switchRow(c, "Bip de dépassement", "Signal sonore répété tant que tu dépasses", "speedBeep", true)
         val c2 = card(content)
         sectionTitle(c2, "AFFICHAGE", "#90A4AE")
         switchRow(c2, "Vue 3D en navigation", "Carte inclinée, voiture vue de derrière", "view3d", true) { applyCarMode() }
         switchRow(c2, "Nord en haut", "Garde la carte fixe au lieu de tourner avec toi", "northUp", false) { applyCarMode() }
         switchRow(c2, "Écran toujours allumé", "Pendant le guidage", "keepOn", true)
+        switchRow(c2, "Fond satellite", "Photos aériennes (Esri) à la place du plan", "satellite", false) { applySatellite() }
+        val c3 = card(content)
+        sectionTitle(c3, "THÈME DE LA CARTE", "#90A4AE")
+        val cur = prefs.str("theme", "auto")
+        val row = LinearLayout(this)
+        row.orientation = LinearLayout.HORIZONTAL
+        for ((key, name) in listOf("auto" to "🌗 Auto", "day" to "☀ Jour", "night" to "🌙 Nuit")) {
+            val b = button(name, GREY) { prefs.setStr("theme", key); checkTheme(); showMenu("guide") }
+            b.textSize = 14f
+            b.background = glossBtn(if (key == cur) ORANGE_L else GREY)
+            b.setTextColor(Color.parseColor(if (key == cur) "#0B1220" else "#FFFFFF"))
+            row.addView(b, LinearLayout.LayoutParams(0, -2, 1f).also { it.rightMargin = dp(6) })
+        }
+        c3.addView(row)
+        c3.addView(label("Auto : bascule selon le lever et le coucher du soleil à ta position.", 12f, false, "#9AA3B5"))
     }
 
     private fun aboutPage(content: LinearLayout) {
         val c = card(content)
         c.addView(label("DJSTEF GPS · v$VERSION", 18f, true))
-        c.addView(label("Carte : OpenStreetMap et OpenFreeMap\nItinéraires : Valhalla / OSRM (OpenStreetMap)\nRadars fixes : data.gouv.fr (Licence Ouverte 2.0)\nTrafic : TomTom\nCarburants : data.economie.gouv.fr (Licence Ouverte)\nRadars : Lufop.net et contributeurs OpenStreetMap (ODbL 1.0), lufop.net\nParkings : OpenStreetMap (ODbL)\nVoiture « Concept 3D » : Concept Car © Eric Chadwick / Khronos, CC BY 4.0, base Unity Fan (CC0)\nLimitations de vitesse : OpenStreetMap (Overpass)\nAdresses : Nominatim", 13f, false, "#C0C7D6"))
+        c.addView(label("Carte : OpenStreetMap et OpenFreeMap\nItinéraires : Valhalla / OSRM (OpenStreetMap)\nRadars fixes : data.gouv.fr (Licence Ouverte 2.0)\nTrafic : TomTom\nCarburants : data.economie.gouv.fr (Licence Ouverte)\nRadars : Lufop.net et contributeurs OpenStreetMap (ODbL 1.0), lufop.net\nParkings : OpenStreetMap (ODbL)\nVoiture « Concept 3D » : Concept Car © Eric Chadwick / Khronos, CC BY 4.0, base Unity Fan (CC0)\nLimitations de vitesse : OpenStreetMap (Overpass)\nAdresses : Nominatim\nSatellite : Esri World Imagery\nHeure d'arrivée avec trafic : TomTom", 13f, false, "#C0C7D6"))
+        val cb = card(content)
+        sectionTitle(cb, "SAUVEGARDE DES RÉGLAGES", "#90A4AE")
+        cb.addView(label("Copie tes réglages (clés API, voiture, favoris…) dans le presse-papiers, ou restaure-les après une réinstallation.", 12f, false, "#9AA3B5"))
+        val cm = getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+        val bx = button("Copier mes réglages", BLUE) {
+            cm.setPrimaryClip(android.content.ClipData.newPlainText("DJStef GPS", prefs.exportJson()))
+            toast("Réglages copiés dans le presse-papiers")
+        }
+        val bi = button("Restaurer depuis le presse-papiers", GREY) {
+            val t = cm.primaryClip?.getItemAt(0)?.text?.toString().orEmpty()
+            val n = prefs.importJson(t)
+            toast(if (n > 0) "$n réglages restaurés" else "Rien à restaurer dans le presse-papiers")
+            if (n > 0) { applyCar(); applySatellite(); checkTheme() }
+        }
+        cb.addView(bx, LinearLayout.LayoutParams(-1, -2).also { it.topMargin = dp(8) })
+        cb.addView(bi, LinearLayout.LayoutParams(-1, -2).also { it.topMargin = dp(8) })
         val c2 = card(content)
         c2.addView(label("Les limitations de vitesse et les radars peuvent être incomplets ou périmés : respecte toujours la signalisation sur la route.", 13f, false, "#9AA3B5"))
     }

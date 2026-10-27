@@ -54,4 +54,66 @@ class AppPrefs(ctx: Context) {
         for (r in list.take(6)) arr.put(JSONObject().put("n", r.name).put("la", r.pt.lat).put("lo", r.pt.lon))
         p.edit().putString("recents", arr.toString()).apply()
     }
+
+    // Favoris libres
+    fun favorites(): List<Place> {
+        val s = p.getString("favlist", null) ?: return emptyList()
+        return try {
+            val arr = JSONArray(s)
+            (0 until arr.length()).map {
+                val o = arr.getJSONObject(it)
+                Place(o.getString("n"), Pt(o.getDouble("la"), o.getDouble("lo")))
+            }
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    private fun saveFavorites(list: List<Place>) {
+        val arr = JSONArray()
+        for (r in list) arr.put(JSONObject().put("n", r.name).put("la", r.pt.lat).put("lo", r.pt.lon))
+        p.edit().putString("favlist", arr.toString()).apply()
+    }
+
+    fun addFavorite(place: Place) {
+        val l = favorites().filter { it.name != place.name }
+        saveFavorites(listOf(place) + l)
+    }
+
+    fun removeFavorite(place: Place) = saveFavorites(favorites().filter { it.name != place.name })
+
+    // Sauvegarde / restauration de tous les réglages
+    fun exportJson(): String {
+        val o = JSONObject()
+        for ((k, v) in p.all) {
+            if (v is Boolean || v is Int || v is Long || v is Float || v is String)
+                o.put(k, JSONObject().put("t", v.javaClass.simpleName).put("v", v.toString()))
+        }
+        return JSONObject().put("djstefgps", o).toString()
+    }
+
+    fun importJson(s: String): Int {
+        return try {
+            val o = JSONObject(s).getJSONObject("djstefgps")
+            val e = p.edit()
+            var n = 0
+            for (k in o.keys()) {
+                val t = o.getJSONObject(k)
+                val v = t.getString("v")
+                when (t.getString("t")) {
+                    "Boolean" -> e.putBoolean(k, v.toBoolean())
+                    "Integer" -> e.putInt(k, v.toInt())
+                    "Long" -> e.putLong(k, v.toLong())
+                    "Float" -> e.putFloat(k, v.toFloat())
+                    "String" -> e.putString(k, v)
+                    else -> continue
+                }
+                n++
+            }
+            e.apply()
+            n
+        } catch (e: Exception) {
+            0
+        }
+    }
 }

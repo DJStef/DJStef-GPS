@@ -25,8 +25,12 @@ data class Step(
     val kind: Int,
     val name: String,
     val dist: Double,
-    val at: Pt
+    val at: Pt,
+    val sign: String = ""
 )
+
+/** Point intermédiaire : stop = étape avec arrêt, sinon simple point de passage (détour). */
+data class Via(val pt: Pt, val stop: Boolean = true)
 
 /** true = autorisé. */
 data class RouteOpts(val tolls: Boolean = true, val highways: Boolean = true, val ferries: Boolean = true)
@@ -321,17 +325,23 @@ object Geocoder {
 
 object Router {
     /** mode : car, bike ou foot */
-    suspend fun route(mode: String, a: Pt, b: Pt, opts: RouteOpts = RouteOpts(), exclude: List<Pt> = emptyList()): Route =
-        withContext(Dispatchers.IO) {
-            try {
-                valhalla(mode, a, b, opts, exclude)
-            } catch (e: Exception) {
-                if (exclude.isNotEmpty()) throw e
-                osrm(mode, a, b)
-            }
-        }
+    suspend fun route(mode: String, a: Pt, b: Pt, opts: RouteOpts = RouteOpts(), exclude: List<Pt> = emptyList(), vias: List<Via> = emptyList()): Route =
+        routes(mode, a, b, opts, exclude, vias, 0).first()
 
-    private fun valhalla(mode: String, a: Pt, b: Pt, opts: RouteOpts, exclude: List<Pt>): Route {
+    /** Itinéraire principal puis alternatives éventuelles (alternatives seulement sans étape). */
+    suspend fun routes(
+        mode: String, a: Pt, b: Pt, opts: RouteOpts = RouteOpts(), exclude: List<Pt> = emptyList(),
+        vias: List<Via> = emptyList(), alternates: Int = 0
+    ): List<Route> = withContext(Dispatchers.IO) {
+        try {
+            valhalla(mode, a, b, opts, exclude, vias, alternates)
+        } catch (e: Exception) {
+            if (exclude.isNotEmpty()) throw e
+            listOf(osrm(mode, a, b, vias))
+        }
+    }
+
+    private fun valhalla(mode: String, a: Pt, b: Pt, opts: RouteOpts, exclude: List<Pt>, vias: List<Via>, alternates: Int): List<Route> {
         val costing = when (mode) {
             "bike" -> "bicycle"
             "foot" -> "pedestrian"
@@ -345,14 +355,15 @@ object Router {
             if (!opts.ferries) auto.put("use_ferry", 0.0).put("exclude_ferries", true)
             co.put("auto", auto)
         }
-        val locs = JSONArray()
-            .put(JSONObject().put("lat", a.lat).put("lon", a.lon).put("type", "break"))
-            .put(JSONObject().put("lat", b.lat).put("lon", b.lon).put("type", "break"))
+        val locs = JSONArray().put(JSONObject().put("lat", a.lat).put("lon", a.lon).put("type", "break"))
+        for (v in vias) locs.put(JSONObject().put("lat", v.pt.lat).put("lon", v.pt.lon).put("type", if (v.stop) "break" else "through"))
+        locs.put(JSONObject().put("lat", b.lat).put("lon", b.lon).put("type", "break"))
         val body = JSONObject()
             .put("locations", locs)
             .put("costing", costing)
             .put("costing_options", co)
             .put("directions_options", JSONObject().put("language", "fr-FR").put("units", "kilometers"))
+        if (alternates > 0 && vias.isEmpty()) body.put("alternates", alternates)
         if (exclude.isNotEmpty()) {
             val ex = JSONArray()
             for (p in exclude.take(50)) ex.put(JSONObject().put("lat", p.lat).put("lon", p.lon))
@@ -360,25 +371,59 @@ object Router {
         }
         val root = JSONObject(Http.post("https://valhalla1.openstreetmap.de/route", body.toString(), 30000))
         if (root.has("error")) throw IOException(root.optString("error"))
-        val trip = root.getJSONObject("trip")
-        val leg = trip.getJSONArray("legs").getJSONObject(0)
-        val pts = decodePolyline6(leg.getString("shape"))
+        val out = ArrayList<Route>()
+        out.add(parseTrip(root.getJSONObject("trip")))
+        val alts = root.optJSONArray("alternates")
+        if (alts != null) {
+            for (i in 0 until alts.length()) {
+                try {
+                    out.add(parseTrip(alts.getJSONObject(i).getJSONObject("trip")))
+                } catch (_: Exception) {
+                }
+            }
+        }
+        return out
+    }
+
+    private fun signText(m: JSONObject): String {
+        val sg = m.optJSONObject("sign") ?: return ""
+        fun txt(k: String): String {
+            val arr = sg.optJSONArray(k) ?: return ""
+            return (0 until arr.length()).mapNotNull { arr.optJSONObject(it)?.optString("text")?.takeIf { t -> t.isNotBlank() } }.joinToString(" / ")
+        }
+        val parts = ArrayList<String>()
+        val nr = txt("exit_number_elements")
+        if (nr.isNotEmpty()) parts.add("Sortie $nr")
+        val br = txt("exit_branch_elements")
+        if (br.isNotEmpty()) parts.add(br)
+        val tw = txt("exit_toward_elements")
+        if (tw.isNotEmpty()) parts.add("vers $tw")
+        val nm = txt("exit_name_elements")
+        if (nm.isNotEmpty() && tw.isEmpty()) parts.add(nm)
+        return parts.joinToString(" · ")
+    }
+
+    private fun parseTrip(trip: JSONObject): Route {
+        val legs = trip.getJSONArray("legs")
+        val pts = ArrayList<Pt>()
         val steps = ArrayList<Step>()
-        val man = leg.getJSONArray("maneuvers")
-        for (i in 0 until man.length()) {
-            val m = man.getJSONObject(i)
-            val idx = m.optInt("begin_shape_index", 0).coerceIn(0, pts.size - 1)
-            val names = m.optJSONArray("street_names")
-            val name = if (names != null && names.length() > 0) names.getString(0) else ""
-            steps.add(
-                Step(
-                    m.optString("instruction").trim().trimEnd('.'),
-                    m.optInt("type", 8),
-                    name,
-                    m.optDouble("length", 0.0) * 1000.0,
-                    pts[idx]
-                )
-            )
+        for (li in 0 until legs.length()) {
+            val leg = legs.getJSONObject(li)
+            val lp = decodePolyline6(leg.getString("shape"))
+            val offset = if (li == 0) 0 else pts.size - 1
+            if (li == 0) pts.addAll(lp) else pts.addAll(lp.drop(1))
+            val man = leg.getJSONArray("maneuvers")
+            val last = man.length() - 1
+            for (i in 0 until man.length()) {
+                if (li > 0 && i == 0) continue // départ de l'étape : déjà annoncé à l'arrivée précédente
+                val m = man.getJSONObject(i)
+                val idx = (offset + m.optInt("begin_shape_index", 0)).coerceIn(0, pts.size - 1)
+                val names = m.optJSONArray("street_names")
+                val name = if (names != null && names.length() > 0) names.getString(0) else ""
+                var text = m.optString("instruction").trim().trimEnd('.')
+                if (li < legs.length() - 1 && i == last) text = "Vous arrivez à l'étape"
+                steps.add(Step(text, m.optInt("type", 8), name, m.optDouble("length", 0.0) * 1000.0, pts[idx], signText(m)))
+            }
         }
         val sum = trip.getJSONObject("summary")
         return Route(pts, steps, sum.getDouble("length") * 1000.0, sum.getDouble("time"))
@@ -414,9 +459,10 @@ object Router {
 
     // --- Secours : OSRM (routing.openstreetmap.de) ---
 
-    private fun osrm(mode: String, a: Pt, b: Pt): Route {
+    private fun osrm(mode: String, a: Pt, b: Pt, vias: List<Via> = emptyList()): Route {
+        val coordsTxt = (listOf(a) + vias.map { it.pt } + b).joinToString(";") { "${it.lon},${it.lat}" }
         val url = "https://routing.openstreetmap.de/routed-$mode/route/v1/driving/" +
-            "${a.lon},${a.lat};${b.lon},${b.lat}?overview=full&geometries=geojson&steps=true"
+            "$coordsTxt?overview=full&geometries=geojson&steps=true"
         val root = JSONObject(Http.get(url, 25000))
         if (root.optString("code") != "Ok") throw IOException("Aucun itinéraire")
         val r = root.getJSONArray("routes").getJSONObject(0)

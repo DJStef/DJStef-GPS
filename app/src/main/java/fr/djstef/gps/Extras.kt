@@ -225,3 +225,61 @@ object Lufop {
         Http.get("https://api.lufop.net/api?key=${URLEncoder.encode(key, "UTF-8")}&format=meta", 15000)
     }
 }
+
+// ---------- Catégories autour de soi (Nominatim, zone limitée) ----------
+
+object Nearby {
+    suspend fun category(near: Pt, phrase: String, d: Double = 0.12): List<Place> = withContext(Dispatchers.IO) {
+        val dLon = d / Math.cos(Math.toRadians(near.lat)).coerceAtLeast(0.2)
+        val url = "https://nominatim.openstreetmap.org/search?format=jsonv2&limit=30&bounded=1&accept-language=fr&q=" +
+            URLEncoder.encode(phrase, "UTF-8") +
+            "&viewbox=${near.lon - dLon},${near.lat + d},${near.lon + dLon},${near.lat - d}"
+        val arr = JSONArray(Http.get(url))
+        val out = ArrayList<Place>()
+        for (i in 0 until arr.length()) {
+            val o = arr.getJSONObject(i)
+            val parts = o.optString("display_name").split(",").map { it.trim() }
+            val name = o.optString("name").ifBlank { parts.firstOrNull() ?: "" }
+            val town = parts.drop(1).firstOrNull { p -> p.any { it.isLetter() } && !p.first().isDigit() } ?: ""
+            out.add(Place(if (town.isNotBlank()) "$name, $town" else name, Pt(o.getString("lat").toDouble(), o.getString("lon").toDouble())))
+        }
+        out.sortedBy { Geo.dist(near, it.pt) }
+    }
+}
+
+// ---------- Heure estimée avec trafic (TomTom Routing) ----------
+
+object TomTomEta {
+    /** Retourne (durée avec trafic en s, retard dû au trafic en s). */
+    suspend fun eta(key: String, a: Pt, b: Pt): Pair<Double, Double>? = withContext(Dispatchers.IO) {
+        val url = "https://api.tomtom.com/routing/1/calculateRoute/${a.lat},${a.lon}:${b.lat},${b.lon}/json" +
+            "?key=${URLEncoder.encode(key, "UTF-8")}&traffic=true&travelMode=car"
+        val root = JSONObject(Http.get(url, 20000))
+        val sum = root.getJSONArray("routes").getJSONObject(0).getJSONObject("summary")
+        Pair(sum.getDouble("travelTimeInSeconds"), sum.optDouble("trafficDelayInSeconds", 0.0))
+    }
+}
+
+// ---------- Lever et coucher du soleil (mode nuit automatique) ----------
+
+object Sun {
+    /** true si le soleil est couché à cet instant pour cette position (approximation NOAA). */
+    fun isNight(lat: Double, lon: Double, nowMs: Long = System.currentTimeMillis()): Boolean {
+        val cal = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC")).also { it.timeInMillis = nowMs }
+        val n = cal.get(java.util.Calendar.DAY_OF_YEAR)
+        val g = 2 * Math.PI / 365 * (n - 1)
+        val decl = 0.006918 - 0.399912 * Math.cos(g) + 0.070257 * Math.sin(g) - 0.006758 * Math.cos(2 * g) +
+            0.000907 * Math.sin(2 * g) - 0.002697 * Math.cos(3 * g) + 0.00148 * Math.sin(3 * g)
+        val eot = 229.18 * (0.000075 + 0.001868 * Math.cos(g) - 0.032077 * Math.sin(g) - 0.014615 * Math.cos(2 * g) - 0.040849 * Math.sin(2 * g))
+        val latR = Math.toRadians(lat)
+        val cosH = (Math.cos(Math.toRadians(90.833)) / (Math.cos(latR) * Math.cos(decl))) - Math.tan(latR) * Math.tan(decl)
+        if (cosH > 1) return true
+        if (cosH < -1) return false
+        val ha = Math.toDegrees(Math.acos(cosH))
+        val sunriseMin = 720 - 4 * (lon + ha) - eot
+        val sunsetMin = 720 - 4 * (lon - ha) - eot
+        val nowMin = cal.get(java.util.Calendar.HOUR_OF_DAY) * 60.0 + cal.get(java.util.Calendar.MINUTE)
+        // Marge de 20 min après le coucher / avant le lever
+        return nowMin < sunriseMin - 20 || nowMin > sunsetMin + 20
+    }
+}
