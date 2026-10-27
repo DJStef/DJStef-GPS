@@ -76,7 +76,7 @@ import kotlin.math.roundToInt
 class MainActivity : Activity() {
 
     companion object {
-        const val VERSION = "0.27"
+        const val VERSION = "0.28"
         const val STYLE_URL = "https://tiles.openfreemap.org/styles/liberty"
         const val STYLE_DARK = "https://tiles.openfreemap.org/styles/dark"
 
@@ -799,7 +799,7 @@ class MainActivity : Activity() {
         st.addLayer(
             LineLayer("route-casing", "route").withProperties(
                 PropertyFactory.lineColor("#FFFFFF"),
-                PropertyFactory.lineWidth(12f),
+                PropertyFactory.lineWidth(Expression.interpolate(Expression.exponential(1.6f), Expression.zoom(), Expression.stop(8, 8f), Expression.stop(12, 12f), Expression.stop(15, 22f), Expression.stop(17, 36f), Expression.stop(19, 60f))),
                 PropertyFactory.lineCap(Property.LINE_CAP_ROUND),
                 PropertyFactory.lineJoin(Property.LINE_JOIN_ROUND)
             )
@@ -807,7 +807,7 @@ class MainActivity : Activity() {
         st.addLayer(
             LineLayer("route-layer", "route").withProperties(
                 PropertyFactory.lineColor("#1A4FB5"),
-                PropertyFactory.lineWidth(8f),
+                PropertyFactory.lineWidth(Expression.interpolate(Expression.exponential(1.6f), Expression.zoom(), Expression.stop(8, 5f), Expression.stop(12, 8f), Expression.stop(15, 16f), Expression.stop(17, 28f), Expression.stop(19, 48f))),
                 PropertyFactory.lineCap(Property.LINE_CAP_ROUND),
                 PropertyFactory.lineJoin(Property.LINE_JOIN_ROUND)
             )
