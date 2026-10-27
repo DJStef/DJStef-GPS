@@ -169,8 +169,11 @@ object Geocoder {
         }
         // « nom à ville » → nom + ville
         val m = Regex("^(.{3,}?)(?:\\s+(?:à|a|au|aux|près de|pres de|sur|dans|en)\\s+|\\s*,\\s*|\\s+-\\s+)(.{3,})$", RegexOption.IGNORE_CASE).find(q)
-        val what = m?.groupValues?.get(1)?.trim()
-        val where = m?.groupValues?.get(2)?.trim()
+        val ws = q.split(Regex("\\s+"))
+        // Sans séparateur : « camping les peupliers colombier » → dernier mot = ville si le premier est un type de lieu
+        val implicit = m == null && ws.size >= 3 && ws[0].lowercase() in TYPES
+        val what = if (implicit) ws.dropLast(1).joinToString(" ") else m?.groupValues?.get(1)?.trim()
+        val where = if (implicit) ws.last() else m?.groupValues?.get(2)?.trim()
 
         val named = ArrayList<Place>()
         if (what != null && where != null) {
@@ -261,6 +264,13 @@ object Geocoder {
             }
         } catch (_: Exception) {
             if (out.isEmpty()) throw java.io.IOException("recherche indisponible")
+        }
+        // Les résultats qui mentionnent la ville demandée passent en premier
+        if (where != null) {
+            fun norm(t: String) = java.text.Normalizer.normalize(t.lowercase(), java.text.Normalizer.Form.NFD).replace(Regex("\\p{M}+"), "")
+            val w = norm(where)
+            val (hit, rest) = out.partition { norm(it.name).contains(w) }
+            return@withContext hit + rest
         }
         out
     }
