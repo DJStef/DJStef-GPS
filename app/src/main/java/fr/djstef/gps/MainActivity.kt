@@ -896,7 +896,7 @@ class MainActivity : Activity() {
                 val ts = TileSet("2.2.0", "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}")
                 ts.setMaxZoom(19f)
                 st.addSource(RasterSource("sat", ts, 256))
-                st.addLayerBelow(RasterLayer("sat-layer", "sat"), "route-layer")
+                st.addLayerBelow(RasterLayer("sat-layer", "sat"), "route-casing")
             }
             applySatellite()
         } catch (e: Exception) {
@@ -2166,7 +2166,7 @@ class MainActivity : Activity() {
                 st.addSource(RasterSource("traffic", ts, 256))
                 st.addLayerBelow(
                     RasterLayer("traffic-layer", "traffic").withProperties(PropertyFactory.rasterOpacity(0.85f)),
-                    "route-layer"
+                    "route-casing"
                 )
             }
             val vis = if (prefs.bool("traffic", false)) Property.VISIBLE else Property.NONE
