@@ -150,14 +150,40 @@ object Http {
 // ---------- Recherche d'adresses (Nominatim / OpenStreetMap) ----------
 
 object Geocoder {
-    suspend fun search(q: String): List<Place> = withContext(Dispatchers.IO) {
-        val url = "https://nominatim.openstreetmap.org/search?format=jsonv2&limit=6&accept-language=fr&q=" +
-            URLEncoder.encode(q, "UTF-8")
-        val arr = JSONArray(Http.get(url))
+    /** Recherche d'adresses et de lieux (campings, commerces…) : Photon (OSM) puis Nominatim, fusionnés. */
+    suspend fun search(q: String, near: Pt? = null): List<Place> = withContext(Dispatchers.IO) {
         val out = ArrayList<Place>()
-        for (i in 0 until arr.length()) {
-            val o = arr.getJSONObject(i)
-            out.add(Place(o.getString("display_name"), Pt(o.getString("lat").toDouble(), o.getString("lon").toDouble())))
+        fun add(pl: Place) {
+            if (out.none { Geo.dist(it.pt, pl.pt) < 120.0 }) out.add(pl)
+        }
+        try {
+            var url = "https://photon.komoot.io/api/?limit=8&lang=fr&q=" + URLEncoder.encode(q, "UTF-8")
+            if (near != null) url += "&lat=${near.lat}&lon=${near.lon}"
+            val feats = JSONObject(Http.get(url)).optJSONArray("features") ?: JSONArray()
+            for (i in 0 until feats.length()) {
+                val f = feats.getJSONObject(i)
+                val pr = f.optJSONObject("properties") ?: continue
+                val c = f.getJSONObject("geometry").getJSONArray("coordinates")
+                val parts = ArrayList<String>()
+                for (k in listOf("name", "street", "city", "postcode", "state")) {
+                    val v = pr.optString(k, "")
+                    if (v.isNotBlank() && v !in parts) parts.add(v)
+                }
+                if (parts.isEmpty()) continue
+                add(Place(parts.joinToString(", "), Pt(c.getDouble(1), c.getDouble(0))))
+            }
+        } catch (_: Exception) {
+        }
+        try {
+            val url = "https://nominatim.openstreetmap.org/search?format=jsonv2&limit=6&accept-language=fr&q=" +
+                URLEncoder.encode(q, "UTF-8")
+            val arr = JSONArray(Http.get(url))
+            for (i in 0 until arr.length()) {
+                val o = arr.getJSONObject(i)
+                add(Place(o.getString("display_name"), Pt(o.getString("lat").toDouble(), o.getString("lon").toDouble())))
+            }
+        } catch (_: Exception) {
+            if (out.isEmpty()) throw java.io.IOException("recherche indisponible")
         }
         out
     }

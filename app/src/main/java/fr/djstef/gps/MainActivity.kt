@@ -76,7 +76,7 @@ import kotlin.math.roundToInt
 class MainActivity : Activity() {
 
     companion object {
-        const val VERSION = "0.8"
+        const val VERSION = "0.9"
         const val STYLE_URL = "https://tiles.openfreemap.org/styles/liberty"
 
         // Palette (même esprit que l'appli IPTV : fond bleu nuit, une couleur par section)
@@ -156,6 +156,7 @@ class MainActivity : Activity() {
     private var lufopCenter: Pt? = null
     private var lufopBusy = false
     private var lufopLastError = ""
+    private var lufopStats = ""
     private var lufopLastTry = 0L
     private lateinit var creditView: TextView
     private var localReports = ArrayList<Pair<Report, Long>>()
@@ -843,7 +844,7 @@ class MainActivity : Activity() {
         hideKeyboard()
         scope.launch {
             try {
-                val res = Geocoder.search(q)
+                val res = Geocoder.search(q, me?.let { Pt(it.latitude, it.longitude) })
                 resultsBox.removeAllViews()
                 if (res.isEmpty()) addRow("Aucun résultat", {})
                 for (p in res) {
@@ -1181,6 +1182,9 @@ class MainActivity : Activity() {
                 val list = Lufop.around(key, p)
                 prefs.setInt("lufopCount", prefs.int("lufopCount", 0) + 1)
                 lufopCenter = p
+                val counts = list.groupingBy { it.kind }.eachCount().entries.joinToString(", ") { "${it.key} ${it.value}" }
+                lufopStats = "${SimpleDateFormat("HH:mm", Locale.FRANCE).format(Date())} : ${list.size} reçus" +
+                    (if (counts.isNotEmpty()) " ($counts)" else "") + " · requêtes aujourd'hui : ${prefs.int("lufopCount", 0)}/200"
                 for (r in list) {
                     // Évite les doublons avec les radars fixes déjà connus (data.gouv.fr)
                     if (r.kind == "Radar fixe" && baseRadars.any { Math.abs(it.pt.lat - r.pt.lat) < 0.0006 && Math.abs(it.pt.lon - r.pt.lon) < 0.0009 }) continue
@@ -2022,7 +2026,10 @@ class MainActivity : Activity() {
         lk.setTextColor(Color.WHITE)
         lk.setSingleLine(true)
         cl.addView(lk)
-        val lres = label(if (lufopLastError.isNotEmpty()) "Dernière erreur : $lufopLastError" else "", 12f, true, "#EF9A9A")
+        val lres = label(
+            if (lufopLastError.isNotEmpty()) "Dernière erreur : $lufopLastError" else lufopStats.ifEmpty { "Aucune donnée reçue pour l'instant (attends la position GPS)." },
+            12f, true, if (lufopLastError.isNotEmpty()) "#EF9A9A" else "#C0C7D6"
+        )
         cl.addView(button("Enregistrer et tester", RED) {
             val k = lk.text.toString().trim()
             prefs.setStr("lufopKey", k)
