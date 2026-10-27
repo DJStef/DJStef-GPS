@@ -558,17 +558,17 @@ class MainActivity : Activity() {
         navBand.gravity = Gravity.CENTER_VERTICAL
         navBand.setBackgroundColor(Color.parseColor("#FF101828"))
         navBand.visibility = View.GONE
-        val navCol = LinearLayout(this)
-        navCol.orientation = LinearLayout.VERTICAL
+        val navInfoCol = LinearLayout(this)
+        navInfoCol.orientation = LinearLayout.VERTICAL
         navEta = label("", 20f, true)
         navSub = label("", 13f, false, "#C0C7D6")
         navDestV = label("", 12f, false, "#9AA3B5")
         navDestV.maxLines = 1
         navDestV.ellipsize = android.text.TextUtils.TruncateAt.END
-        navCol.addView(navEta)
-        navCol.addView(navSub)
-        navCol.addView(navDestV)
-        navBand.addView(navCol, LinearLayout.LayoutParams(0, -2, 1f).also { it.leftMargin = dp(10); it.rightMargin = dp(8) })
+        navInfoCol.addView(navEta)
+        navInfoCol.addView(navSub)
+        navInfoCol.addView(navDestV)
+        navBand.addView(navInfoCol, LinearLayout.LayoutParams(0, -2, 1f).also { it.leftMargin = dp(10); it.rightMargin = dp(8) })
         val navStop = button("Arrêter", RED) { stopNavigation() }
         navStop.textSize = 15f
         navBand.addView(navStop, LinearLayout.LayoutParams(dp(104), dp(52)))
