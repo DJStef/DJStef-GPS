@@ -76,7 +76,7 @@ import kotlin.math.roundToInt
 class MainActivity : Activity() {
 
     companion object {
-        const val VERSION = "0.35"
+        const val VERSION = "0.36"
         const val STYLE_URL = "https://tiles.openfreemap.org/styles/liberty"
         const val STYLE_DARK = "https://tiles.openfreemap.org/styles/dark"
 
@@ -108,6 +108,8 @@ class MainActivity : Activity() {
     private lateinit var searchBox: EditText
     private lateinit var resultsBox: LinearLayout
     private var sideBox: View? = null
+    private lateinit var sideMore: LinearLayout
+    private lateinit var menuBtn: TextView
 
     /** Affiche/masque la liste de résultats et dégage le bas et le côté de l'écran pendant qu'elle est ouverte. */
     private fun setResults(show: Boolean) {
@@ -504,16 +506,27 @@ class MainActivity : Activity() {
         zout.visibility = View.GONE
         zoomInBtn = zin
         zoomOutBtn = zout
-        sideBtns = listOf(recBtn, repBtn, trafficBtn, zin, zout, muteBtn, viewBtn)
+        // Un seul bouton visible (au-dessus du bandeau, à droite) ; les autres s'affichent quand on l'appuie
+        sideMore = LinearLayout(this)
+        sideMore.orientation = LinearLayout.VERTICAL
+        sideMore.visibility = View.GONE
+        menuBtn = circleBtn("☰", 44) {
+            sideMore.visibility = if (sideMore.visibility == View.VISIBLE) View.GONE else View.VISIBLE
+            menuBtn.text = if (sideMore.visibility == View.VISIBLE) "✕" else "☰"
+        }
+        sideBtns = listOf(recBtn, repBtn, trafficBtn, zin, zout, muteBtn, viewBtn, menuBtn)
         for (b in sideBtns) {
             b.alpha = 0.82f
             (b.layoutParams as LinearLayout.LayoutParams).topMargin = dp(8)
-            side.addView(b)
+            if (b !== menuBtn) sideMore.addView(b)
         }
+        side.addView(sideMore)
+        side.addView(menuBtn)
         muteBtn.visibility = View.GONE
         viewBtn.visibility = View.GONE
-        val sideLp = FrameLayout.LayoutParams(-2, -2, Gravity.END or Gravity.CENTER_VERTICAL)
+        val sideLp = FrameLayout.LayoutParams(-2, -2, Gravity.END or Gravity.BOTTOM)
         sideLp.rightMargin = dp(10)
+        sideLp.bottomMargin = dp(120)
         root.addView(side, sideLp)
         sideBox = side
 
@@ -630,6 +643,7 @@ class MainActivity : Activity() {
         root.addView(bottomBox, bLp)
         bottomBox.addOnLayoutChangeListener { _, _, top, _, bottom, _, _, _, _ ->
             bottomH = bottom - top
+            placeSide()
             applyMapMargins()
             applyNavPadding()
         }
@@ -646,6 +660,25 @@ class MainActivity : Activity() {
 
         setContentView(root)
         updateModeButtons()
+    }
+
+    /** Le bouton de menu se pose juste au-dessus du bandeau du bas, à droite. */
+    private fun placeSide() {
+        val sv = sideBox ?: return
+        if (!::bottomBox.isInitialized || !::navBand.isInitialized) return
+        val lp = sv.layoutParams as FrameLayout.LayoutParams
+        val land = isLandscape()
+        val base = when {
+            navigating && !land -> navBand.height
+            land -> 0
+            else -> bottomBox.height
+        }
+        val want = base + bottomInset + dp(if (navigating && !land) 12 else 10)
+        if (lp.bottomMargin != want || lp.rightMargin != dp(10) + rightInset) {
+            lp.bottomMargin = want
+            lp.rightMargin = dp(10) + rightInset
+            sv.layoutParams = lp
+        }
     }
 
     /** Pastille de numéro de route : A/E = autoroute (bleu), N = nationale (rouge), D = départementale (jaune). */
@@ -699,9 +732,7 @@ class MainActivity : Activity() {
             b.requestLayout()
         }
         trafficBtn.visibility = if (land && navigating) View.GONE else View.VISIBLE
-        sideBox?.let { sv ->
-            (sv.layoutParams as FrameLayout.LayoutParams).also { it.rightMargin = dp(10) + rightInset; sv.layoutParams = it }
-        }
+        placeSide()
         applyBottomMargins()
     }
 
