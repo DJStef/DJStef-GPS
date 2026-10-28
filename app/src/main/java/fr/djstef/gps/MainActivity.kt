@@ -54,6 +54,7 @@ import org.maplibre.android.maps.MapView
 import org.maplibre.android.maps.Style
 import org.maplibre.android.style.expressions.Expression
 import org.maplibre.android.style.layers.CircleLayer
+import org.maplibre.android.style.layers.FillLayer
 import org.maplibre.android.style.layers.LineLayer
 import org.maplibre.android.style.layers.Property
 import org.maplibre.android.style.layers.PropertyFactory
@@ -76,7 +77,7 @@ import kotlin.math.roundToInt
 class MainActivity : Activity() {
 
     companion object {
-        const val VERSION = "0.65"
+        const val VERSION = "0.66"
         private val EURO_RE = Regex("^E\\s?\\d{1,3}$")
         private val SIGN_REF_RE = Regex("^([A-Z]{1,2}\\s?\\d{1,4}[A-Za-z]?)\\s*[·:-]\\s*(.*)$")
         private val VERS_RE = Regex("\\s+vers\\s+(.+)$")
@@ -243,6 +244,7 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         prefs = AppPrefs(this)
+        TomTomUsage.prefs = prefs
         trips = TripStore(this)
         CarSprites.assets = assets
         NavBridge.go = { pl ->
@@ -1102,7 +1104,7 @@ class MainActivity : Activity() {
         st.transition = org.maplibre.android.style.layers.TransitionOptions(0, 0, false)
         widenRoads(st)
         basePois(!navigating)
-        for (id in listOf("radars", "reports", "route", "dest", "me", "incidents")) {
+        for (id in listOf("radars", "reports", "route", "dest", "me", "incidents", "reach")) {
             st.addSource(GeoJsonSource(id, FeatureCollection.fromFeatures(emptyList<Feature>())))
         }
         st.addLayer(
@@ -1160,6 +1162,19 @@ class MainActivity : Activity() {
                 PropertyFactory.iconIgnorePlacement(true)
             )
         )
+        st.addLayerBelow(
+            FillLayer("reach-fill", "reach").withProperties(
+                PropertyFactory.fillColor("#1A4FB5"),
+                PropertyFactory.fillOpacity(0.18f)
+            ), "route-casing"
+        )
+        st.addLayerBelow(
+            LineLayer("reach-line", "reach").withProperties(
+                PropertyFactory.lineColor("#1A4FB5"),
+                PropertyFactory.lineWidth(3f)
+            ), "route-casing"
+        )
+        reachPts?.let { drawReach(it) }
         st.addLayer(
             CircleLayer("inc-layer", "incidents").withProperties(
                 PropertyFactory.circleRadius(11f),
@@ -1427,6 +1442,39 @@ class MainActivity : Activity() {
         val vis = if (prefs.bool("showFixed", true)) Property.VISIBLE else Property.NONE
         style?.getLayerAs<CircleLayer>("radar-layer")?.setProperties(PropertyFactory.visibility(vis))
         style?.getLayerAs<SymbolLayer>("radar-sym")?.setProperties(PropertyFactory.visibility(vis))
+    }
+
+    private var reachPts: List<Pt>? = null
+    private var lastRevMs = 0L
+
+    private fun drawReach(pts: List<Pt>?) {
+        val src = style?.getSourceAs<GeoJsonSource>("reach") ?: return
+        if (pts == null || pts.size < 3) { src.setGeoJson(FeatureCollection.fromFeatures(emptyList<Feature>())); return }
+        val ring = pts.map { Point.fromLngLat(it.lon, it.lat) } + Point.fromLngLat(pts[0].lon, pts[0].lat)
+        src.setGeoJson(Feature.fromGeometry(org.maplibre.geojson.Polygon.fromLngLats(listOf(ring))))
+    }
+
+    private fun showReach(minutes: Int) {
+        val key = prefs.str("tomtomKey", "")
+        val l = me
+        if (key.isBlank()) { toast("Ajoute d'abord ta clé TomTom"); return }
+        if (l == null) { toast("Position GPS en attente…"); return }
+        toast("Calcul de la zone atteignable en $minutes min…")
+        scope.launch {
+            try {
+                val pts = TomTomExtra.reach(key, Pt(l.latitude, l.longitude), minutes)
+                if (pts.size < 3) { toast("Aucune zone renvoyée"); return@launch }
+                reachPts = pts
+                drawReach(pts)
+                follow = false
+                val b = LatLngBounds.Builder()
+                pts.forEach { b.include(LatLng(it.lat, it.lon)) }
+                map?.easeCamera(CameraUpdateFactory.newLatLngBounds(b.build(), dp(40), dp(120), dp(40), dp(200)), 900)
+                closeMenu()
+            } catch (e: Exception) {
+                toast("Zone indisponible : ${e.message}")
+            }
+        }
     }
 
     private var incidents: List<Incident> = emptyList()
@@ -1765,6 +1813,11 @@ class MainActivity : Activity() {
         scope.launch {
             try {
                 limitNow = SpeedLimits.at(p, heading)
+                val tk = prefs.str("tomtomKey", "")
+                if (SpeedLimits.lastNames.isBlank() && tk.isNotBlank() && System.currentTimeMillis() - lastRevMs > 20000) {
+                    lastRevMs = System.currentTimeMillis()
+                    try { SpeedLimits.lastNames = TomTomExtra.roadAt(tk, p) } catch (_: Exception) {}
+                }
                 refreshLimitView()
                 updateRoadName()
             } catch (e: Exception) {
@@ -2978,6 +3031,19 @@ class MainActivity : Activity() {
         sectionTitle(c, "TRAFIC EN TEMPS RÉEL", "#4DB6AC")
         switchRow(c, "Accidents et incidents", "Accidents, bouchons, travaux, routes fermées, annonces vocales sur ton trajet", "incidents", true) { refreshIncidentLayer(); lastIncFetch = 0L; refreshPanel() }
         switchRow(c, "Afficher le trafic", "Vert fluide, orange ralenti, rouge bouchon", "traffic", false) { setupTraffic(); refreshPanel() }
+        val cr = card(content)
+        sectionTitle(cr, "ZONE ATTEIGNABLE", "#4DB6AC")
+        cr.addView(label("Dessine sur la carte tout ce que tu peux atteindre depuis ta position, trafic compris.", 12f, false, "#9AA3B5"))
+        val rr = LinearLayout(this)
+        rr.orientation = LinearLayout.HORIZONTAL
+        for ((txt, mn) in listOf("15 min" to 15, "30 min" to 30, "1 h" to 60)) {
+            rr.addView(button(txt, "#00897B") { showReach(mn) }, LinearLayout.LayoutParams(0, -2, 1f).also { it.rightMargin = dp(6) })
+        }
+        rr.addView(button("Effacer", GREY) { reachPts = null; drawReach(null); closeMenu() }, LinearLayout.LayoutParams(0, -2, 1f))
+        cr.addView(rr, LinearLayout.LayoutParams(-1, -2).also { it.topMargin = dp(8) })
+        val cu = card(content)
+        sectionTitle(cu, "CONSOMMATION TOMTOM (GRATUIT)", "#4DB6AC")
+        cu.addView(label(TomTomUsage.summary() + "\nLes tuiles de trafic sur la carte (200 000 / mois) ne sont pas comptées ici.", 12f, false, "#C0C7D6"))
         val c2 = card(content)
         sectionTitle(c2, "CLÉ TOMTOM (GRATUITE)", "#4DB6AC")
         c2.addView(label("Crée un compte gratuit sur developer.tomtom.com (sans carte bancaire), puis copie ta clé API ici. Le palier gratuit couvre l'usage perso.", 12f, false, "#9AA3B5"))

@@ -311,3 +311,59 @@ object Sun {
         return nowMin < sunriseMin - 20 || nowMin > sunsetMin + 20
     }
 }
+
+// ---------- Compteur d'usage TomTom (palier gratuit : quotas mensuels) ----------
+
+object TomTomUsage {
+    @Volatile var prefs: AppPrefs? = null
+
+    private fun month(): String = java.text.SimpleDateFormat("yyyyMM", java.util.Locale.US).format(java.util.Date())
+
+    private fun service(url: String): String? = when {
+        !url.contains("api.tomtom.com") -> null
+        url.contains("calculateReachableRange") -> "Zone atteignable"
+        url.contains("/routing/") -> "Routage"
+        url.contains("incidentDetails") -> "Incidents"
+        url.contains("reverseGeocode") -> "Géocodage inverse"
+        url.contains("/search/") -> "Recherche"
+        else -> "Autre"
+    }
+
+    fun hit(url: String) {
+        val p = prefs ?: return
+        val s = service(url) ?: return
+        val k = "ttu-${month()}-$s"
+        p.setInt(k, p.int(k, 0) + 1)
+    }
+
+    /** Limites gratuites mensuelles (grille officielle TomTom). */
+    val LIMITS = linkedMapOf("Routage" to 20000, "Incidents" to 2500, "Recherche" to 2500, "Géocodage inverse" to 20000, "Zone atteignable" to 2500)
+
+    fun summary(): String {
+        val p = prefs ?: return ""
+        return LIMITS.entries.joinToString("\n") { (s, lim) -> "$s : ${p.int("ttu-${month()}-$s", 0)} / $lim ce mois-ci" }
+    }
+}
+
+// ---------- TomTom : géocodage inverse et zone atteignable ----------
+
+object TomTomExtra {
+    /** Route sous la position : « A 54 · Voie Georges Pompidou » (numéros puis nom), ou "" si inconnue. */
+    suspend fun roadAt(key: String, p: Pt): String = withContext(Dispatchers.IO) {
+        val url = "https://api.tomtom.com/search/2/reverseGeocode/${p.lat},${p.lon}.json" +
+            "?key=${URLEncoder.encode(key, "UTF-8")}&radius=40&language=fr-FR"
+        val a = JSONObject(Http.get(url, 8000)).optJSONArray("addresses")?.optJSONObject(0)?.optJSONObject("address")
+            ?: return@withContext ""
+        val nums = a.optJSONArray("routeNumbers")?.let { r -> (0 until r.length()).map { r.optString(it) } } ?: emptyList()
+        val street = a.optString("streetName", "")
+        (nums.filter { it.isNotBlank() } + listOf(street).filter { it.isNotBlank() }).joinToString(" · ")
+    }
+
+    /** Contour de la zone atteignable en `minutes` minutes (trafic compris). */
+    suspend fun reach(key: String, p: Pt, minutes: Int): List<Pt> = withContext(Dispatchers.IO) {
+        val url = "https://api.tomtom.com/routing/1/calculateReachableRange/${p.lat},${p.lon}/json" +
+            "?key=${URLEncoder.encode(key, "UTF-8")}&timeBudgetInSec=${minutes * 60}&travelMode=car&traffic=true"
+        val b = JSONObject(Http.get(url, 20000)).getJSONObject("reachableRange").getJSONArray("boundary")
+        (0 until b.length()).map { Pt(b.getJSONObject(it).getDouble("latitude"), b.getJSONObject(it).getDouble("longitude")) }
+    }
+}

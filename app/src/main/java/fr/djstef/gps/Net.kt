@@ -142,6 +142,7 @@ object Http {
     private const val UA = "DJStefGPS/0.1"
 
     fun get(url: String, timeout: Int = 15000): String {
+        TomTomUsage.hit(url)
         val c = URL(url).openConnection() as HttpURLConnection
         c.connectTimeout = timeout
         c.readTimeout = timeout
