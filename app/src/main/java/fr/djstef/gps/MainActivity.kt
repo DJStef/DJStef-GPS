@@ -76,7 +76,7 @@ import kotlin.math.roundToInt
 class MainActivity : Activity() {
 
     companion object {
-        const val VERSION = "0.45"
+        const val VERSION = "0.46"
         const val STYLE_URL = "https://tiles.openfreemap.org/styles/liberty"
         const val STYLE_DARK = "https://tiles.openfreemap.org/styles/dark"
 
@@ -637,13 +637,15 @@ class MainActivity : Activity() {
         navArr.gravity = Gravity.END
         val kmRow = LinearLayout(this)
         kmRow.orientation = LinearLayout.HORIZONTAL
+        kmRow.gravity = Gravity.CENTER_VERTICAL
+        // Une seule ligne : km à gauche · temps restant au centre · heure d'arrivée à droite
         kmRow.addView(navSub, LinearLayout.LayoutParams(0, -2, 1f))
+        kmRow.addView(navEta, LinearLayout.LayoutParams(-2, -2))
         kmRow.addView(navArr, LinearLayout.LayoutParams(0, -2, 1f))
         navDestV = label("", 16f, false, "#B8C2D6")
         navDestV.gravity = Gravity.CENTER
         navDestV.maxLines = 1
         navDestV.ellipsize = android.text.TextUtils.TruncateAt.END
-        navInfoCol.addView(navEta)
         navInfoCol.addView(kmRow, LinearLayout.LayoutParams(-1, -2))
         navInfoCol.addView(navDestV)
         navBand.addView(navInfoCol, LinearLayout.LayoutParams(0, -2, 1f).also { it.leftMargin = dp(8); it.rightMargin = dp(8) })
