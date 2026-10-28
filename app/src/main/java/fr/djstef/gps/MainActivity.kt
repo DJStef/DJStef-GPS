@@ -76,7 +76,7 @@ import kotlin.math.roundToInt
 class MainActivity : Activity() {
 
     companion object {
-        const val VERSION = "0.48"
+        const val VERSION = "0.49"
         const val STYLE_URL = "https://tiles.openfreemap.org/styles/liberty"
         const val STYLE_DARK = "https://tiles.openfreemap.org/styles/dark"
 
@@ -659,7 +659,9 @@ class MainActivity : Activity() {
         navBand.addView(kmRow, LinearLayout.LayoutParams(-1, -2).also { it.topMargin = dp(4) })
         val altBtn = circleBtn("⇄", 48) { alternativesDialog() }
         altBtn.elevation = 0f
+        altBtn.alpha = 1f
         altBtn.textSize = 22f
+        altBtn.background = GradientDrawable().also { it.shape = GradientDrawable.OVAL; it.setColor(Color.parseColor("#33405F")) }
         val botRow = LinearLayout(this)
         botRow.orientation = LinearLayout.HORIZONTAL
         botRow.gravity = Gravity.CENTER_VERTICAL
