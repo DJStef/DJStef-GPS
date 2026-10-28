@@ -76,7 +76,7 @@ import kotlin.math.roundToInt
 class MainActivity : Activity() {
 
     companion object {
-        const val VERSION = "0.39"
+        const val VERSION = "0.40"
         const val STYLE_URL = "https://tiles.openfreemap.org/styles/liberty"
         const val STYLE_DARK = "https://tiles.openfreemap.org/styles/dark"
 
@@ -740,7 +740,7 @@ class MainActivity : Activity() {
         val w = resources.displayMetrics.widthPixels
         val colW = if (land) (w * 0.46).toInt() else FrameLayout.LayoutParams.MATCH_PARENT
         (topBox.layoutParams as FrameLayout.LayoutParams).also { it.width = colW; topBox.layoutParams = it }
-        topBox.setPadding(dp(10) + leftInset, topInset + dp(10), if (land) dp(10) else dp(10) + rightInset, 0)
+        topBox.setPadding(dp(10) + leftInset, topInset + dp(4), if (land) dp(10) else dp(10) + rightInset, 0)
         (bottomBox.layoutParams as FrameLayout.LayoutParams).also { it.width = colW; bottomBox.layoutParams = it }
         val sz = if (land) 70 else 84
         infoRow.orientation = if (land) LinearLayout.HORIZONTAL else LinearLayout.VERTICAL
@@ -817,6 +817,12 @@ class MainActivity : Activity() {
     }
 
     /** Place la voiture vers le bas de la zone de carte visible. */
+    private fun setMapPadding(m: MapLibreMap, l: Int, t: Int, r: Int, b: Int) {
+        val cur = m.padding
+        if (cur.size >= 4 && cur[0] == l && cur[1] == t && cur[2] == r && cur[3] == b) return
+        m.setPadding(l, t, r, b)
+    }
+
     private fun applyNavPadding() {
         val m = map ?: return
         if (!navigating || !::rootLayout.isInitialized) return
@@ -826,11 +832,11 @@ class MainActivity : Activity() {
         if (isLandscape()) {
             val left = (w * 0.46).toInt()
             val top = (2 * 0.70 * h - h).toInt().coerceIn(0, (h * 0.8).toInt())
-            m.setPadding(left, top, 0, bottomInset)
+            setMapPadding(m, left, top, 0, bottomInset)
         } else {
             val bottom = bottomH + bottomInset
             val top = (2 * 0.74 * h - h + bottom).toInt().coerceIn(0, (h * 0.8).toInt())
-            m.setPadding(0, top, 0, bottom)
+            setMapPadding(m, 0, top, 0, bottom)
         }
         positionCar()
     }
@@ -1085,7 +1091,7 @@ class MainActivity : Activity() {
 
     private fun adjustZoom(delta: Double) {
         val m = map ?: return
-        val cur = prefs.float("navZoom", 0f).toDouble().takeIf { it > 0 } ?: (m.cameraPosition.zoom - zoomBoost)
+        val cur = prefs.float("navZoom", 16.5f).toDouble().takeIf { it > 0 } ?: (m.cameraPosition.zoom - zoomBoost)
         val z = ((Math.round((cur + delta) * 2) / 2.0)).coerceIn(14.0, 19.5)
         prefs.setFloat("navZoom", z.toFloat())
         toast(String.format(Locale.FRANCE, "Zoom %.1f", z))
@@ -1287,7 +1293,7 @@ class MainActivity : Activity() {
         val m = map ?: return
         if (navigating && follow) {
             val kmh = if (loc.hasSpeed()) loc.speed * 3.6 else 0.0
-            val manual = prefs.float("navZoom", 0f).toDouble()
+            val manual = prefs.float("navZoom", 16.5f).toDouble()
             val auto = if (kmh < 30) 18.0 else if (kmh < 70) 17.3 else if (kmh < 100) 16.6 else 16.0
             tZoom = ((if (manual > 0) manual else auto) + zoomBoost).coerceIn(13.0, 20.5)
             tTilt = if (prefs.bool("view3d", true)) 60.0 else 0.0
@@ -1328,7 +1334,7 @@ class MainActivity : Activity() {
         val b = CameraPosition.Builder().target(LatLng(loc.latitude, loc.longitude))
         if (navigating) {
             val kmh = if (loc.hasSpeed()) loc.speed * 3.6 else 0.0
-            val manual = prefs.float("navZoom", 0f).toDouble()
+            val manual = prefs.float("navZoom", 16.5f).toDouble()
             val auto = if (kmh < 30) 18.0 else if (kmh < 70) 17.3 else if (kmh < 100) 16.6 else 16.0
             b.zoom(((if (manual > 0) manual else auto) + zoomBoost).coerceIn(13.0, 20.5))
             b.tilt(if (prefs.bool("view3d", true)) 60.0 else 0.0)
