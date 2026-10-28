@@ -285,19 +285,19 @@ class ManeuverView(ctx: Context) : View(ctx) {
             }
             26, 27 -> { // rond-point : sortie à prendre mise en évidence (circulation à droite = sens inverse des aiguilles)
                 val n = if (exitNo in 1..8) exitNo else 2
-                val cx = 50f; val cy = 40f; val rr = 19f
+                val cx = 50f; val cy = 54f; val rr = 15f
                 p.alpha = 110; p.strokeWidth = 8f
                 c.drawCircle(cx, cy, rr, p)
                 p.alpha = 255; p.strokeWidth = 11f
-                path.moveTo(50f, 94f); path.lineTo(50f, cy + rr)
+                path.moveTo(50f, 96f); path.lineTo(50f, cy + rr)
                 c.drawPath(path, p)
                 val sweep = -(90f * n).coerceAtMost(330f)
                 c.drawArc(RectF(cx - rr, cy - rr, cx + rr, cy + rr), 90f, sweep, false, p)
                 val deg = 90.0 - 90.0 * n
                 val r = Math.toRadians(deg)
                 val dx = Math.cos(r).toFloat(); val dy = Math.sin(r).toFloat()
-                val ex = Path(); ex.moveTo(cx + dx * rr, cy + dy * rr); ex.lineTo(cx + dx * 33f, cy + dy * 33f)
-                c.drawPath(ex, p); head(c, cx + dx * 51f, cy + dy * 51f, deg)
+                val ex = Path(); ex.moveTo(cx + dx * rr, cy + dy * rr); ex.lineTo(cx + dx * 28f, cy + dy * 28f)
+                c.drawPath(ex, p); head(c, cx + dx * 42f, cy + dy * 42f, deg)
             }
             4, 5, 6 -> { // arrivée : drapeau
                 p.strokeWidth = 9f
