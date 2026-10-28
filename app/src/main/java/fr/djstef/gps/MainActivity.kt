@@ -76,7 +76,7 @@ import kotlin.math.roundToInt
 class MainActivity : Activity() {
 
     companion object {
-        const val VERSION = "0.36"
+        const val VERSION = "0.37"
         const val STYLE_URL = "https://tiles.openfreemap.org/styles/liberty"
         const val STYLE_DARK = "https://tiles.openfreemap.org/styles/dark"
 
@@ -109,7 +109,7 @@ class MainActivity : Activity() {
     private lateinit var resultsBox: LinearLayout
     private var sideBox: View? = null
     private lateinit var sideMore: LinearLayout
-    private lateinit var menuBtn: TextView
+    private lateinit var moreBtn: TextView
 
     /** Affiche/masque la liste de résultats et dégage le bas et le côté de l'écran pendant qu'elle est ouverte. */
     private fun setResults(show: Boolean) {
@@ -510,18 +510,18 @@ class MainActivity : Activity() {
         sideMore = LinearLayout(this)
         sideMore.orientation = LinearLayout.VERTICAL
         sideMore.visibility = View.GONE
-        menuBtn = circleBtn("☰", 44) {
+        moreBtn = circleBtn("☰", 44) {
             sideMore.visibility = if (sideMore.visibility == View.VISIBLE) View.GONE else View.VISIBLE
-            menuBtn.text = if (sideMore.visibility == View.VISIBLE) "✕" else "☰"
+            moreBtn.text = if (sideMore.visibility == View.VISIBLE) "✕" else "☰"
         }
-        sideBtns = listOf(recBtn, repBtn, trafficBtn, zin, zout, muteBtn, viewBtn, menuBtn)
+        sideBtns = listOf(recBtn, repBtn, trafficBtn, zin, zout, muteBtn, viewBtn, moreBtn)
         for (b in sideBtns) {
             b.alpha = 0.82f
             (b.layoutParams as LinearLayout.LayoutParams).topMargin = dp(8)
-            if (b !== menuBtn) sideMore.addView(b)
+            if (b !== moreBtn) sideMore.addView(b)
         }
         side.addView(sideMore)
-        side.addView(menuBtn)
+        side.addView(moreBtn)
         muteBtn.visibility = View.GONE
         viewBtn.visibility = View.GONE
         val sideLp = FrameLayout.LayoutParams(-2, -2, Gravity.END or Gravity.BOTTOM)
