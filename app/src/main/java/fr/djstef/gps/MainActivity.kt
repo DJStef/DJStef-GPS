@@ -76,7 +76,8 @@ import kotlin.math.roundToInt
 class MainActivity : Activity() {
 
     companion object {
-        const val VERSION = "0.61"
+        const val VERSION = "0.62"
+        private val EURO_RE = Regex("^E\\s?\\d{1,3}$")
         private val SIGN_REF_RE = Regex("^([A-Z]{1,2}\\s?\\d{1,4}[A-Za-z]?)\\s*[·:-]\\s*(.*)$")
         private val VERS_RE = Regex("\\s+vers\\s+(.+)$")
         private val TURN_KINDS = setOf(15, 19, 21, 24, 3, 16, 14, 10, 18, 20, 23, 2, 9, 11, 12, 13)
@@ -1791,6 +1792,10 @@ class MainActivity : Activity() {
             }
         }
         fun norm(x: String) = x.replace(" ", "").uppercase()
+        // En France on lit A 54 / N 113 sur les panneaux : on écarte les numéros européens (E 80) s'il y a mieux
+        val loc = SpeedLimits.lastNames.split(" · ").map { it.trim() }.filter { REF_ONLY.matches(it) }
+        val french = (refs + loc).filter { !EURO_RE.matches(it) }
+        if (french.isNotEmpty()) { refs.clear(); refs.addAll(french.distinctBy { norm(it) }) }
         val ref = refs.firstOrNull()?.let { it.replace(Regex("^([A-Z]+)(\\d)"), "$1 $2") } ?: ""
         if (name.isNotBlank() && ref.isNotBlank() && norm(name) == norm(ref)) name = ""
         val txt = listOf(ref, name).filter { it.isNotBlank() }.joinToString(" · ")
@@ -2436,6 +2441,7 @@ class MainActivity : Activity() {
         }
         if (sm != null) addRef(sm.groupValues[1])
         next.refs.forEach { addRef(it) }
+        if (allRefs.any { !EURO_RE.matches(it) }) allRefs.removeAll { EURO_RE.matches(it) }
         val towardTxt = if (sm != null) sm.groupValues[2] else toward
         navToward.text = towardTxt
         navToward.visibility = if (towardTxt.isBlank()) View.GONE else View.VISIBLE
