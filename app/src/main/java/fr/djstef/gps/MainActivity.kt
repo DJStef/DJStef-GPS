@@ -76,7 +76,7 @@ import kotlin.math.roundToInt
 class MainActivity : Activity() {
 
     companion object {
-        const val VERSION = "0.37"
+        const val VERSION = "0.38"
         const val STYLE_URL = "https://tiles.openfreemap.org/styles/liberty"
         const val STYLE_DARK = "https://tiles.openfreemap.org/styles/dark"
 
@@ -252,6 +252,7 @@ class MainActivity : Activity() {
         }
         buildUi(savedInstanceState)
         goFullscreen()
+        handleIncoming(intent)
         scope.launch {
             baseRadars = RadarRepository.load(this@MainActivity)
             fixedRadars = baseRadars + lufopMap.values
@@ -1458,6 +1459,58 @@ class MainActivity : Activity() {
         setResults(true)
     }
 
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        handleIncoming(intent)
+    }
+
+    /** Lieu partagé depuis Google Maps (ou lien geo:) : on lit les coordonnées et on lance l'itinéraire. */
+    private fun handleIncoming(i: android.content.Intent?) {
+        i ?: return
+        var text: String? = null
+        if (i.action == android.content.Intent.ACTION_SEND) text = i.getStringExtra(android.content.Intent.EXTRA_TEXT)
+        else if (i.action == android.content.Intent.ACTION_VIEW) text = i.dataString
+        if (text.isNullOrBlank()) return
+        i.action = null
+        val t = text
+        scope.launch {
+            toast("Lieu reçu…")
+            val pl = withContext(Dispatchers.IO) { placeFromShared(t) }
+            if (pl == null) toast("Impossible de lire la position de ce lieu") else goTo(pl)
+        }
+    }
+
+    private fun placeFromShared(t: String): Place? {
+        fun coords(u: String): Pt? {
+            val pats = listOf(
+                Regex("!3d(-?\\d+\\.\\d+)!4d(-?\\d+\\.\\d+)"),
+                Regex("@(-?\\d+\\.\\d+),(-?\\d+\\.\\d+)"),
+                Regex("[?&](?:q|ll|query|destination)=(-?\\d+\\.\\d+)(?:,|%2C)(-?\\d+\\.\\d+)"),
+                Regex("^geo:(-?\\d+\\.\\d+),(-?\\d+\\.\\d+)")
+            )
+            for (r in pats) r.find(u)?.let { return Pt(it.groupValues[1].toDouble(), it.groupValues[2].toDouble()) }
+            return null
+        }
+        val url = Regex("https?://\\S+").find(t)?.value
+        val firstLine = t.lines().firstOrNull { it.isNotBlank() && !it.startsWith("http") && !it.startsWith("geo:") }?.trim().orEmpty()
+        val name0 = if (firstLine.isNotBlank()) firstLine else (Regex("[?&]q=([^&]+)").find(t)?.groupValues?.get(1)?.let { java.net.URLDecoder.decode(it, "UTF-8") } ?: "Lieu partagé")
+        coords(url ?: t)?.let { return Place(name0, it) }
+        if (url == null) return null
+        // Lien court (maps.app.goo.gl…) : on suit la redirection pour retrouver les coordonnées
+        return try {
+            val c = java.net.URL(url).openConnection() as java.net.HttpURLConnection
+            c.instanceFollowRedirects = true
+            c.connectTimeout = 8000
+            c.readTimeout = 8000
+            c.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 14)")
+            c.responseCode
+            val fin = c.url.toString()
+            val body = try { c.inputStream.bufferedReader().use { it.readText().take(400000) } } catch (_: Exception) { "" }
+            c.disconnect()
+            (coords(fin) ?: coords(body))?.let { Place(name0, it) }
+        } catch (_: Exception) { null }
+    }
+
     private fun goTo(p: Place) {
         if (pendingVia) {
             pendingVia = false
@@ -1552,11 +1605,19 @@ class MainActivity : Activity() {
                             goTo(place)
                         })
                     }
+                    if (final) addRow("🔎 Chercher « $q » dans Google Maps", {
+                        try {
+                            startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW,
+                                android.net.Uri.parse("https://www.google.com/maps/search/?api=1&query=" + android.net.Uri.encode(q))))
+                            toast("Dans Google Maps : Partager > DJStef GPS")
+                        } catch (_: Exception) { toast("Google Maps indisponible") }
+                    })
                     if (!final) addRow("… recherche en cours", {})
                     else if (Geocoder.diag.isNotBlank()) addRow("ℹ v$VERSION · " + Geocoder.diag, {})
                     setResults(true)
                 }
                 Geocoder.googleKey = prefs.str("googleKey", "")
+                Geocoder.tomtomKey = prefs.str("tomtomKey", "")
                 render(emptyList(), false)
                 val res = Geocoder.search(q, me?.let { Pt(it.latitude, it.longitude) }) { part ->
                     scope.launch { render(part, false) }
@@ -2916,7 +2977,7 @@ class MainActivity : Activity() {
     private fun aboutPage(content: LinearLayout) {
         val c = card(content)
         c.addView(label("DJSTEF GPS · v$VERSION", 18f, true))
-        c.addView(label("Carte : OpenStreetMap et OpenFreeMap\nItinéraires : Valhalla / OSRM (OpenStreetMap)\nRadars fixes : data.gouv.fr (Licence Ouverte 2.0)\nTrafic : TomTom\nCarburants : data.economie.gouv.fr (Licence Ouverte)\nRadars : Lufop.net et contributeurs OpenStreetMap (ODbL 1.0), lufop.net\nParkings : OpenStreetMap (ODbL)\nVoiture « Concept 3D » : Concept Car © Eric Chadwick / Khronos, CC BY 4.0, base Unity Fan (CC0)\nLimitations de vitesse : OpenStreetMap (Overpass)\nAdresses : Nominatim\nSatellite : Esri World Imagery\nHeure d'arrivée avec trafic : TomTom\nRecherche : Photon (Komoot), Nominatim, annuaire des entreprises et Base Adresse Nationale (data.gouv.fr), Google Places (si clé)", 13f, false, "#C0C7D6"))
+        c.addView(label("Carte : OpenStreetMap et OpenFreeMap\nItinéraires : Valhalla / OSRM (OpenStreetMap)\nRadars fixes : data.gouv.fr (Licence Ouverte 2.0)\nTrafic : TomTom\nCarburants : data.economie.gouv.fr (Licence Ouverte)\nRadars : Lufop.net et contributeurs OpenStreetMap (ODbL 1.0), lufop.net\nParkings : OpenStreetMap (ODbL)\nVoiture « Concept 3D » : Concept Car © Eric Chadwick / Khronos, CC BY 4.0, base Unity Fan (CC0)\nLimitations de vitesse : OpenStreetMap (Overpass)\nAdresses : Nominatim\nSatellite : Esri World Imagery\nHeure d'arrivée avec trafic : TomTom\nRecherche : Photon (Komoot), Nominatim, annuaire des entreprises et Base Adresse Nationale (data.gouv.fr), TomTom (clé du trafic), Google Places (si clé)", 13f, false, "#C0C7D6"))
         val cb = card(content)
         sectionTitle(cb, "SAUVEGARDE DES RÉGLAGES", "#90A4AE")
         cb.addView(label("Copie tes réglages (clés API, voiture, favoris…) dans le presse-papiers, ou restaure-les après une réinstallation.", 12f, false, "#9AA3B5"))

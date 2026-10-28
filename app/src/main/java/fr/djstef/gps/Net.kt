@@ -201,6 +201,8 @@ object Geocoder {
     @Volatile var diag: String = ""
     /** Clé Google Places (facultative) : si elle est renseignée, les résultats Google passent en tête. */
     @Volatile var googleKey: String = ""
+    /** Clé TomTom (déjà utilisée pour le trafic) : sa recherche de lieux/commerces est très bonne. */
+    @Volatile var tomtomKey: String = ""
     private val STOP = setOf("le", "la", "les", "l", "un", "une", "de", "du", "des", "d", "au", "aux", "et", "chez")
     private val TYPES = setOf(
         "camping", "campings", "restaurant", "hotel", "hôtel", "boulangerie", "pharmacie", "supermarche",
@@ -356,6 +358,28 @@ object Geocoder {
                         if (lb.isBlank()) null else Place(lb, Pt(co.getDouble(1), co.getDouble(0)))
                     })
                 } catch (_: Exception) {
+                }
+            }
+            if (tomtomKey.isNotBlank()) {
+                jobs += async {
+                    try {
+                        var url = "https://api.tomtom.com/search/2/search/" + URLEncoder.encode(q, "UTF-8").replace("+", "%20") +
+                            ".json?limit=10&language=fr-FR&countrySet=FR&key=$tomtomKey"
+                        if (near != null) url += "&lat=${near.lat}&lon=${near.lon}&radius=150000"
+                        val arr = JSONObject(Http.get(url, 7000)).optJSONArray("results") ?: JSONArray()
+                        anyOk = true
+                        note("TomTom ${arr.length()}")
+                        pushTop((0 until arr.length()).mapNotNull {
+                            val o = arr.getJSONObject(it)
+                            val pos = o.optJSONObject("position") ?: return@mapNotNull null
+                            val nm = o.optJSONObject("poi")?.optString("name").orEmpty()
+                            val ad = o.optJSONObject("address")?.optString("freeformAddress").orEmpty()
+                            val label = listOf(nm, ad).filter { x -> x.isNotBlank() }.joinToString(", ")
+                            if (label.isBlank()) null else Place(label, Pt(pos.getDouble("lat"), pos.getDouble("lon")))
+                        })
+                    } catch (e: Exception) {
+                        note("TomTom erreur ${e.message}")
+                    }
                 }
             }
             if (googleKey.isNotBlank()) {
