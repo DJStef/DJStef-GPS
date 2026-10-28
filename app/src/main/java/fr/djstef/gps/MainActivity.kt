@@ -76,7 +76,7 @@ import kotlin.math.roundToInt
 class MainActivity : Activity() {
 
     companion object {
-        const val VERSION = "0.42"
+        const val VERSION = "0.43"
         const val STYLE_URL = "https://tiles.openfreemap.org/styles/liberty"
         const val STYLE_DARK = "https://tiles.openfreemap.org/styles/dark"
 
@@ -2614,6 +2614,7 @@ class MainActivity : Activity() {
         "route" -> BLUE
         "radar" -> RED
         "traffic" -> "#00897B"
+        "offline" -> "#00695C"
         "fuel" -> "#EF6C00"
         "parking" -> "#1E88E5"
         "trips" -> "#8D6E63"
@@ -2627,6 +2628,7 @@ class MainActivity : Activity() {
         "route" -> "Itinéraire"
         "radar" -> "Radars"
         "traffic" -> "Trafic"
+        "offline" -> "Cartes hors-ligne"
         "fuel" -> "Carburants"
         "parking" -> "Parkings"
         "trips" -> "Mes trajets"
@@ -2676,6 +2678,7 @@ class MainActivity : Activity() {
             "route" -> routePage(content)
             "radar" -> radarPage(content)
             "traffic" -> trafficPage(content)
+            "offline" -> offlinePage(content)
             "fuel" -> fuelPage(content)
             "parking" -> parkingPage(content)
             "trips" -> tripsPage(content)
@@ -2709,6 +2712,7 @@ class MainActivity : Activity() {
             arrayOf("parking", "🅿", "Parkings", "Autour de toi", "#1E88E5"),
             arrayOf("trips", "🕘", "Mes trajets", "Historique", "#8D6E63"),
             arrayOf("traffic", "🚦", "Trafic", "Temps réel (TomTom)", "#00897B"),
+            arrayOf("offline", "📥", "Cartes hors-ligne", "Régions sans internet", "#00695C"),
             arrayOf("guide", "🔊", "Guidage", "Voix, vitesse, vue 3D", SLATE),
             arrayOf("about", "ℹ", "À propos", "Version et sources", GREY)
         )
@@ -3021,6 +3025,151 @@ class MainActivity : Activity() {
         }
         c3.addView(row)
         c3.addView(label("Auto : bascule selon le lever et le coucher du soleil à ta position.", 12f, false, "#9AA3B5"))
+    }
+
+    // ---------- Cartes hors-ligne (par régions) ----------
+
+    private data class OffReg(val name: String, val s: Double, val w: Double, val n: Double, val e: Double)
+
+    private val offRegions = listOf(
+        OffReg("Auvergne-Rhône-Alpes", 44.1, 2.0, 46.5, 7.2),
+        OffReg("Bourgogne-Franche-Comté", 46.15, 2.8, 48.4, 7.2),
+        OffReg("Bretagne", 47.2, -5.2, 48.9, -1.0),
+        OffReg("Centre-Val de Loire", 46.3, 0.05, 48.95, 3.2),
+        OffReg("Corse", 41.3, 8.5, 43.05, 9.6),
+        OffReg("Grand Est", 47.4, 3.35, 50.2, 8.3),
+        OffReg("Hauts-de-France", 48.8, 1.4, 51.1, 4.3),
+        OffReg("Île-de-France", 48.1, 1.4, 49.25, 3.6),
+        OffReg("Normandie", 48.15, -1.95, 50.1, 1.8),
+        OffReg("Nouvelle-Aquitaine", 42.75, -1.8, 47.2, 2.65),
+        OffReg("Occitanie", 42.3, -0.4, 45.05, 4.9),
+        OffReg("Pays de la Loire", 46.25, -2.6, 48.6, 0.95),
+        OffReg("Provence-Alpes-Côte d'Azur", 42.95, 4.2, 45.15, 7.75)
+    )
+
+    private fun offlinePage(content: LinearLayout) {
+        val c0 = card(content)
+        sectionTitle(c0, "CARTES SANS INTERNET", "#4DB6AC")
+        c0.addView(label("Télécharge les régions dont tu as besoin (Wi-Fi conseillé, plusieurs centaines de Mo par région). Une fois téléchargée, la carte de la région s'affiche sans réseau. Le calcul d'itinéraire et la recherche d'adresses restent en ligne. Cartes OpenStreetMap via OpenFreeMap : ne télécharge que ce qui t'est utile.", 12f, false, "#9AA3B5"))
+        val c = card(content)
+        val mgr = org.maplibre.android.offline.OfflineManager.getInstance(this)
+        val status = HashMap<String, TextView>()
+        val action = HashMap<String, TextView>()
+        val have = HashMap<String, org.maplibre.android.offline.OfflineRegion>()
+
+        fun nameOf(r: org.maplibre.android.offline.OfflineRegion): String =
+            try { org.json.JSONObject(String(r.metadata)).optString("name") } catch (_: Exception) { "" }
+
+        fun refresh(reg: OffReg) {
+            val r = have[reg.name]
+            val st = status[reg.name] ?: return
+            val ac = action[reg.name] ?: return
+            if (r == null) {
+                st.text = "Non téléchargée"
+                ac.text = "Télécharger"
+                ac.background = glossBtn(GREEN)
+                ac.setOnClickListener { startOffline(reg, have, status, action) { refresh(reg) } }
+            } else {
+                ac.text = "Supprimer"
+                ac.background = glossBtn(RED)
+                ac.setOnClickListener {
+                    r.delete(object : org.maplibre.android.offline.OfflineRegion.OfflineRegionDeleteCallback {
+                        override fun onDelete() { runOnUiThread { have.remove(reg.name); refresh(reg); toast("${reg.name} supprimée") } }
+                        override fun onError(error: String) { runOnUiThread { toast("Erreur : $error") } }
+                    })
+                }
+                r.getStatus(object : org.maplibre.android.offline.OfflineRegion.OfflineRegionStatusCallback {
+                    override fun onStatus(s: org.maplibre.android.offline.OfflineRegionStatus?) {
+                        runOnUiThread {
+                            st.text = if (s == null) "Téléchargée" else if (s.isComplete) "Téléchargée · ${s.completedResourceSize / 1048576} Mo"
+                            else "Incomplète : ${s.completedResourceCount}/${s.requiredResourceCount}"
+                            if (s != null && !s.isComplete) {
+                                ac.text = "Reprendre"
+                                ac.background = glossBtn(ORANGE)
+                                ac.setOnClickListener { resumeOffline(reg, r, st) }
+                            }
+                        }
+                    }
+                    override fun onError(error: String?) {}
+                })
+            }
+        }
+        for (reg in offRegions) {
+            val row = LinearLayout(this)
+            row.orientation = LinearLayout.HORIZONTAL
+            row.gravity = Gravity.CENTER_VERTICAL
+            val col = LinearLayout(this)
+            col.orientation = LinearLayout.VERTICAL
+            col.addView(label(reg.name, 15f, true))
+            val st = label("…", 12f, false, "#9AA3B5")
+            col.addView(st)
+            status[reg.name] = st
+            row.addView(col, LinearLayout.LayoutParams(0, -2, 1f))
+            val ac = button("…", GREY) {}
+            ac.textSize = 13f
+            action[reg.name] = ac
+            row.addView(ac, LinearLayout.LayoutParams(dp(120), -2))
+            c.addView(row, LinearLayout.LayoutParams(-1, -2).also { it.topMargin = dp(8) })
+        }
+        mgr.listOfflineRegions(object : org.maplibre.android.offline.OfflineManager.ListOfflineRegionsCallback {
+            override fun onList(offlineRegions: Array<org.maplibre.android.offline.OfflineRegion>?) {
+                runOnUiThread {
+                    offlineRegions?.forEach { r -> val n = nameOf(r); if (n.isNotBlank()) have[n] = r }
+                    for (reg in offRegions) refresh(reg)
+                }
+            }
+            override fun onError(error: String) {
+                runOnUiThread { for (reg in offRegions) refresh(reg) }
+            }
+        })
+    }
+
+    private fun startOffline(
+        reg: OffReg,
+        have: HashMap<String, org.maplibre.android.offline.OfflineRegion>,
+        status: HashMap<String, TextView>,
+        action: HashMap<String, TextView>,
+        done: () -> Unit
+    ) {
+        val bounds = LatLngBounds.Builder().include(LatLng(reg.s, reg.w)).include(LatLng(reg.n, reg.e)).build()
+        val def = org.maplibre.android.offline.OfflineTilePyramidRegionDefinition(
+            STYLE_URL, bounds, 5.0, 14.0, resources.displayMetrics.density
+        )
+        val meta = org.json.JSONObject().put("name", reg.name).toString().toByteArray()
+        status[reg.name]?.text = "Préparation…"
+        org.maplibre.android.offline.OfflineManager.getInstance(this).createOfflineRegion(def, meta,
+            object : org.maplibre.android.offline.OfflineManager.CreateOfflineRegionCallback {
+                override fun onCreate(offlineRegion: org.maplibre.android.offline.OfflineRegion) {
+                    runOnUiThread {
+                        have[reg.name] = offlineRegion
+                        action[reg.name]?.text = "Téléchargement…"
+                        resumeOffline(reg, offlineRegion, status[reg.name]!!)
+                    }
+                }
+                override fun onError(error: String) {
+                    runOnUiThread { status[reg.name]?.text = "Erreur : $error"; done() }
+                }
+            })
+    }
+
+    private fun resumeOffline(reg: OffReg, r: org.maplibre.android.offline.OfflineRegion, st: TextView) {
+        r.setObserver(object : org.maplibre.android.offline.OfflineRegion.OfflineRegionObserver {
+            override fun onStatusChanged(status: org.maplibre.android.offline.OfflineRegionStatus) {
+                runOnUiThread {
+                    val pct = if (status.requiredResourceCount > 0) (100 * status.completedResourceCount / status.requiredResourceCount) else 0
+                    st.text = if (status.isComplete) "Téléchargée · ${status.completedResourceSize / 1048576} Mo"
+                    else "$pct % · ${status.completedResourceSize / 1048576} Mo"
+                    if (status.isComplete) { r.setDownloadState(org.maplibre.android.offline.OfflineRegion.STATE_INACTIVE); toast("${reg.name} : carte téléchargée") }
+                }
+            }
+            override fun onError(error: org.maplibre.android.offline.OfflineRegionError) {
+                runOnUiThread { st.text = "Erreur : ${error.message}" }
+            }
+            override fun mapboxTileCountLimitExceeded(limit: Long) {
+                runOnUiThread { st.text = "Limite de tuiles atteinte" }
+            }
+        })
+        r.setDownloadState(org.maplibre.android.offline.OfflineRegion.STATE_ACTIVE)
     }
 
     private fun aboutPage(content: LinearLayout) {
