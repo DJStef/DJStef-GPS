@@ -76,7 +76,7 @@ import kotlin.math.roundToInt
 class MainActivity : Activity() {
 
     companion object {
-        const val VERSION = "0.60"
+        const val VERSION = "0.61"
         private val SIGN_REF_RE = Regex("^([A-Z]{1,2}\\s?\\d{1,4}[A-Za-z]?)\\s*[·:-]\\s*(.*)$")
         private val VERS_RE = Regex("\\s+vers\\s+(.+)$")
         private val TURN_KINDS = setOf(15, 19, 21, 24, 3, 16, 14, 10, 18, 20, 23, 2, 9, 11, 12, 13)
@@ -699,6 +699,7 @@ class MainActivity : Activity() {
         bLp.rightMargin = dp(10)
         bLp.bottomMargin = dp(10)
         root.addView(bottomBox, bLp)
+        navBand.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> placeRoadName() }
         bottomBox.addOnLayoutChangeListener { _, _, top, _, bottom, _, _, _, _ ->
             bottomH = bottom - top
             placeSide()
@@ -1810,17 +1811,24 @@ class MainActivity : Activity() {
     }
 
     private fun placeRoadName() {
-        if (!::carName.isInitialized || !::bottomBox.isInitialized) return
+        if (!::carName.isInitialized || !::bottomBox.isInitialized || !::navBand.isInitialized) return
         val lp = carName.layoutParams as FrameLayout.LayoutParams
-        val bl = bottomBox.layoutParams as FrameLayout.LayoutParams
         val land = isLandscape()
-        lp.gravity = if (land) Gravity.BOTTOM or Gravity.START else Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
-        lp.leftMargin = if (land) leftInset + dp(10) else 0
-        val nb = bottomBox.height + bl.bottomMargin + dp(8)
-        if (lp.bottomMargin != nb) {
+        val ref = if (navBand.visibility == View.VISIBLE) navBand else bottomBox
+        val a = IntArray(2)
+        val b = IntArray(2)
+        ref.getLocationOnScreen(a)
+        rootLayout.getLocationOnScreen(b)
+        val top = a[1] - b[1]
+        val nb = (rootLayout.height - top + dp(6)).coerceAtLeast(dp(6))
+        val g = if (land) Gravity.BOTTOM or Gravity.START else Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
+        val lm = if (land) leftInset + dp(10) else 0
+        if (lp.bottomMargin != nb || lp.gravity != g || lp.leftMargin != lm) {
             lp.bottomMargin = nb
+            lp.gravity = g
+            lp.leftMargin = lm
+            carName.layoutParams = lp
         }
-        carName.layoutParams = lp
     }
 
     private fun refreshLimitView() {
@@ -2419,20 +2427,21 @@ class MainActivity : Activity() {
         val vm = VERS_RE.find(next.text)
         val toward = if (next.sign.isNotBlank()) next.sign else vm?.groupValues?.get(1)?.replace("/", " · ")?.let { "vers $it" } ?: ""
         val instr = if (next.sign.isBlank() && vm != null) next.text.removeRange(vm.range) else next.text
-        // « A 54 · vers Nîmes… » : le numéro de route devient un badge comme l'E80
+        // « A 54 · vers Nîmes… » : le numéro de la sortie rejoint les badges de route (sans doublon)
         val sm = SIGN_REF_RE.find(toward)
-        if (sm != null) {
-            styleRoad(navRoad2, listOf(sm.groupValues[1]), 18f)
-            val rest = sm.groupValues[2]
-            navToward.text = rest
-            navToward.visibility = if (rest.isBlank()) View.GONE else View.VISIBLE
-        } else {
-            navRoad2.visibility = View.GONE
-            navToward.text = toward
-            navToward.visibility = if (toward.isBlank()) View.GONE else View.VISIBLE
+        val allRefs = ArrayList<String>()
+        fun addRef(x: String) {
+            val c = x.replace(" ", "").uppercase()
+            if (allRefs.none { it.replace(" ", "").uppercase() == c }) allRefs.add(x)
         }
+        if (sm != null) addRef(sm.groupValues[1])
+        next.refs.forEach { addRef(it) }
+        val towardTxt = if (sm != null) sm.groupValues[2] else toward
+        navToward.text = towardTxt
+        navToward.visibility = if (towardTxt.isBlank()) View.GONE else View.VISIBLE
+        navRoad2.visibility = View.GONE
         navStreet.text = instr
-        styleRoad(navRoad, next.refs, 18f)
+        styleRoad(navRoad, allRefs, 18f)
         roadView.visibility = View.GONE
         val nowMs = System.currentTimeMillis()
         if (nowMs - lastEtaFetch > 180000) dest?.let { fetchTrafficEta(p, it, false) }
