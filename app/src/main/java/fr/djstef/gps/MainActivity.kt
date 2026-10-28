@@ -76,7 +76,8 @@ import kotlin.math.roundToInt
 class MainActivity : Activity() {
 
     companion object {
-        const val VERSION = "0.54"
+        const val VERSION = "0.55"
+        private val SIGN_REF_RE = Regex("^([A-Z]{1,2}\\s?\\d{1,4}[A-Za-z]?)\\s*[·:-]\\s*(.*)$")
         private val VERS_RE = Regex("\\s+vers\\s+(.+)$")
         private val TURN_KINDS = setOf(15, 19, 21, 24, 3, 16, 14, 10, 18, 20, 23, 2, 9, 11, 12, 13)
         private val CONDENSED: Typeface = Typeface.create("sans-serif-condensed", Typeface.BOLD)
@@ -126,6 +127,7 @@ class MainActivity : Activity() {
     private lateinit var navDist: TextView
     private lateinit var navStreet: TextView
     private lateinit var navRoad: TextView
+    private lateinit var navRoad2: TextView
     private lateinit var navToward: TextView
     private lateinit var navArr: TextView
     private lateinit var roadView: TextView
@@ -469,11 +471,14 @@ class MainActivity : Activity() {
         navStreet.ellipsize = android.text.TextUtils.TruncateAt.END
         navRoad = TextView(this)
         navRoad.visibility = View.GONE
+        navRoad2 = TextView(this)
+        navRoad2.visibility = View.GONE
         val distRow = LinearLayout(this)
         distRow.orientation = LinearLayout.HORIZONTAL
         distRow.gravity = Gravity.CENTER_VERTICAL
         distRow.addView(navDist)
         distRow.addView(navRoad, LinearLayout.LayoutParams(-2, -2).also { it.leftMargin = dp(10) })
+        distRow.addView(navRoad2, LinearLayout.LayoutParams(-2, -2).also { it.leftMargin = dp(6) })
         navCol.addView(distRow)
         navCol.addView(navToward)
         navCol.addView(navStreet)
@@ -549,6 +554,7 @@ class MainActivity : Activity() {
         limitView = SignView(this)
         limitView.visibility = View.GONE
         limitView.alpha = 1f
+        limitView.setOnClickListener { resetGps() }
         speedView.alpha = 1f
         roadView = TextView(this)
         roadView.visibility = View.GONE
@@ -815,7 +821,7 @@ class MainActivity : Activity() {
     }
 
     private fun scaleView(v: View, f: Float, skip: View?, deep: Boolean) {
-        if (v === skip) return
+        if (v === skip || (::navRoad2.isInitialized && v === navRoad2)) return
         val key = 0x7f0a0001
         var st = v.getTag(key) as? Sc
         if (st == null) { st = Sc(); v.setTag(key, st) }
@@ -1020,6 +1026,28 @@ class MainActivity : Activity() {
     // ---------- Carte ----------
 
     /** Élargit les routes du fond de carte (surtout aux zooms de guidage) pour bien voir où on va. */
+    /** Pastilles de lieux du fond de carte (i, restaurants…) : masquées pendant le guidage pour dégager la route. */
+    private fun basePois(show: Boolean) {
+        val st = style ?: return
+        try {
+            for (l in st.layers) {
+                if (l is SymbolLayer && l.id.startsWith("poi_")) {
+                    l.setProperties(PropertyFactory.visibility(if (show) Property.VISIBLE else Property.NONE))
+                }
+            }
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun resetGps() {
+        try { locMgr.removeUpdates(locListener) } catch (_: Exception) {}
+        me = null
+        snapIdx = 0
+        smInit = false
+        toast("Position GPS réinitialisée")
+        startLocation()
+    }
+
     private fun widenRoads(st: Style) {
         val re = Regex("^(road|tunnel|bridge)_(motorway_link|motorway|trunk_primary|secondary_tertiary|minor|street|link|service_track)(_casing)?$")
         for (l in st.layers) {
@@ -1047,6 +1075,7 @@ class MainActivity : Activity() {
         // Pas de fondu des symboles (la voiture clignotait à chaque mise à jour de position)
         st.transition = org.maplibre.android.style.layers.TransitionOptions(0, 0, false)
         widenRoads(st)
+        basePois(!navigating)
         for (id in listOf("radars", "reports", "route", "dest", "me", "incidents")) {
             st.addSource(GeoJsonSource(id, FeatureCollection.fromFeatures(emptyList<Feature>())))
         }
@@ -2209,6 +2238,7 @@ class MainActivity : Activity() {
     private fun startNavigation() {
         val r = route ?: return
         navigating = true
+        basePois(false)
         NavBridge.navigating = true
         NavBridge.route = r
         NavBridge.destName = destName
@@ -2244,6 +2274,7 @@ class MainActivity : Activity() {
     private fun stopNavigation() {
         if (!navigating) return
         navigating = false
+        basePois(true)
         zoomBoost = 0.0
         roadView.visibility = View.GONE
         NavBridge.navigating = false
@@ -2309,8 +2340,18 @@ class MainActivity : Activity() {
         val vm = VERS_RE.find(next.text)
         val toward = if (next.sign.isNotBlank()) next.sign else vm?.groupValues?.get(1)?.replace("/", " · ")?.let { "vers $it" } ?: ""
         val instr = if (next.sign.isBlank() && vm != null) next.text.removeRange(vm.range) else next.text
-        navToward.text = toward
-        navToward.visibility = if (toward.isBlank()) View.GONE else View.VISIBLE
+        // « A 54 · vers Nîmes… » : le numéro de route devient un badge comme l'E80
+        val sm = SIGN_REF_RE.find(toward)
+        if (sm != null) {
+            styleRoad(navRoad2, listOf(sm.groupValues[1]), 18f)
+            val rest = sm.groupValues[2]
+            navToward.text = rest
+            navToward.visibility = if (rest.isBlank()) View.GONE else View.VISIBLE
+        } else {
+            navRoad2.visibility = View.GONE
+            navToward.text = toward
+            navToward.visibility = if (toward.isBlank()) View.GONE else View.VISIBLE
+        }
         navStreet.text = instr
         styleRoad(navRoad, next.refs, 18f)
         roadView.visibility = View.GONE
