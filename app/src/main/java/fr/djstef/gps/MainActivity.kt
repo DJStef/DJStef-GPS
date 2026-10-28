@@ -76,7 +76,7 @@ import kotlin.math.roundToInt
 class MainActivity : Activity() {
 
     companion object {
-        const val VERSION = "0.51"
+        const val VERSION = "0.52"
         private val VERS_RE = Regex("\\s+vers\\s+(.+)$")
         private val TURN_KINDS = setOf(15, 19, 21, 24, 3, 16, 14, 10, 18, 20, 23, 2, 9, 11, 12, 13)
         private val CONDENSED: Typeface = Typeface.create("sans-serif-condensed", Typeface.BOLD)
@@ -963,7 +963,7 @@ class MainActivity : Activity() {
         // Pas de fondu des symboles (la voiture clignotait à chaque mise à jour de position)
         st.transition = org.maplibre.android.style.layers.TransitionOptions(0, 0, false)
         widenRoads(st)
-        for (id in listOf("radars", "reports", "route", "dest", "me")) {
+        for (id in listOf("radars", "reports", "route", "dest", "me", "incidents")) {
             st.addSource(GeoJsonSource(id, FeatureCollection.fromFeatures(emptyList<Feature>())))
         }
         st.addLayer(
@@ -1021,6 +1021,15 @@ class MainActivity : Activity() {
                 PropertyFactory.iconIgnorePlacement(true)
             )
         )
+        st.addLayer(
+            CircleLayer("inc-layer", "incidents").withProperties(
+                PropertyFactory.circleRadius(11f),
+                PropertyFactory.circleColor(Expression.get("color")),
+                PropertyFactory.circleStrokeColor("#FFFFFF"),
+                PropertyFactory.circleStrokeWidth(3f)
+            )
+        )
+        refreshIncidentLayer()
         applyCar()
         applyRadarVisibility()
         setupSatellite()
@@ -1029,6 +1038,13 @@ class MainActivity : Activity() {
 
         if (!listenersAdded) {
             listenersAdded = true
+            m.addOnMapClickListener { ll ->
+                val pt = m.projection.toScreenLocation(ll)
+                val hit = m.queryRenderedFeatures(pt, "inc-layer").firstOrNull()
+                val id = hit?.getStringProperty("id")
+                val inc = incidents.firstOrNull { it.id == id }
+                if (inc != null) { showIncident(inc); true } else false
+            }
             m.addOnMapLongClickListener { ll ->
                 vias.clear()
                 setDestination(Pt(ll.latitude, ll.longitude), "Point choisi sur la carte")
@@ -1220,6 +1236,92 @@ class MainActivity : Activity() {
         val vis = if (prefs.bool("showFixed", true)) Property.VISIBLE else Property.NONE
         style?.getLayerAs<CircleLayer>("radar-layer")?.setProperties(PropertyFactory.visibility(vis))
         style?.getLayerAs<SymbolLayer>("radar-sym")?.setProperties(PropertyFactory.visibility(vis))
+    }
+
+    private var incidents: List<Incident> = emptyList()
+    private var lastIncFetch = 0L
+    private var incBusy = false
+    private val incSaid = HashSet<String>()
+
+    private fun refreshIncidentLayer() {
+        val src = style?.getSourceAs<GeoJsonSource>("incidents") ?: return
+        val show = prefs.bool("incidents", true)
+        src.setGeoJson(FeatureCollection.fromFeatures(if (!show) emptyList() else incidents.map {
+            val f = point(it.pt)
+            f.addStringProperty("id", it.id)
+            f.addStringProperty("color", it.color)
+            f
+        }))
+    }
+
+    private fun showIncident(i: Incident) {
+        val sb = StringBuilder()
+        if (i.desc.isNotBlank()) sb.append(i.desc).append("\n")
+        if (i.roads.isNotBlank()) sb.append("Route : ").append(i.roads).append("\n")
+        if (i.from.isNotBlank()) sb.append("De : ").append(i.from).append("\n")
+        if (i.to.isNotBlank()) sb.append("À : ").append(i.to).append("\n")
+        if (i.lengthM > 0) sb.append("Longueur : ").append(if (i.lengthM >= 1000) String.format(Locale.FRANCE, "%.1f km", i.lengthM / 1000.0) else "${i.lengthM} m").append("\n")
+        if (i.delayS >= 60) sb.append("Retard : +").append(i.delayS / 60).append(" min").append("\n")
+        me?.let { sb.append("Distance : ").append(String.format(Locale.FRANCE, "%.1f km", Geo.dist(Pt(it.latitude, it.longitude), i.pt) / 1000)) }
+        android.app.AlertDialog.Builder(this).setTitle(i.label).setMessage(sb.toString().trim()).setPositiveButton("OK", null).show()
+    }
+
+    /** Récupère les incidents autour de la position et sur la route à venir, et annonce ceux qui sont sur le trajet. */
+    private fun checkIncidents(loc: Location) {
+        val key = prefs.str("tomtomKey", "")
+        if (key.isBlank() || !prefs.bool("incidents", true) || incBusy) return
+        val now = System.currentTimeMillis()
+        if (now - lastIncFetch < 120000) return
+        lastIncFetch = now
+        incBusy = true
+        var minLat = loc.latitude - 0.12
+        var maxLat = loc.latitude + 0.12
+        var minLon = loc.longitude - 0.18
+        var maxLon = loc.longitude + 0.18
+        val r = route
+        if (navigating && r != null) {
+            var acc = 0.0
+            var j = snapIdx.coerceIn(0, r.pts.size - 1)
+            while (j < r.pts.size - 1 && acc < 60000) { acc += Geo.dist(r.pts[j], r.pts[j + 1]); j++ }
+            for (k in snapIdx.coerceIn(0, r.pts.size - 1)..j) {
+                val p = r.pts[k]
+                minLat = minOf(minLat, p.lat - 0.04); maxLat = maxOf(maxLat, p.lat + 0.04)
+                minLon = minOf(minLon, p.lon - 0.05); maxLon = maxOf(maxLon, p.lon + 0.05)
+            }
+            // L'API limite la surface (~10 000 km²) : on recentre sur la position si trop grand
+            if ((maxLat - minLat) * 111.0 * (maxLon - minLon) * 111.0 * Math.cos(Math.toRadians(loc.latitude)) > 9000) {
+                minLat = loc.latitude - 0.12; maxLat = loc.latitude + 0.12
+                minLon = loc.longitude - 0.18; maxLon = loc.longitude + 0.18
+            }
+        }
+        scope.launch {
+            try {
+                incidents = Incidents.fetch(key, minLat, minLon, maxLat, maxLon)
+                refreshIncidentLayer()
+            } catch (_: Exception) {
+            } finally {
+                incBusy = false
+            }
+        }
+    }
+
+    private fun announceIncidents(loc: Location) {
+        val r = route ?: return
+        if (!navigating || incidents.isEmpty()) return
+        val me = Pt(loc.latitude, loc.longitude)
+        val to = (snapIdx + 1500).coerceAtMost(r.pts.size - 1)
+        for (i in incidents) {
+            if (!i.speakable || i.id in incSaid) continue
+            val d = Geo.dist(me, i.pt)
+            if (d > 4000 || d < 150) continue
+            val sn = Geo.snap(i.pt, r.pts, snapIdx.coerceAtLeast(0), to) ?: continue
+            if (sn.third > 60.0) continue
+            incSaid.add(i.id)
+            val km = if (d >= 1000) String.format(Locale.FRANCE, "%.0f kilomètres", d / 1000) else "${(d / 100).roundToInt() * 100} mètres"
+            speak("${i.label} dans $km" + (if (i.desc.isNotBlank()) ". ${i.desc}" else ""))
+            toast("${i.label} à ${String.format(Locale.FRANCE, "%.1f km", d / 1000)}" + (if (i.delayS >= 60) " · +${i.delayS / 60} min" else ""))
+            break
+        }
     }
 
     private fun point(p: Pt) = Feature.fromGeometry(Point.fromLngLat(p.lon, p.lat))
@@ -1443,6 +1545,8 @@ class MainActivity : Activity() {
             checkTheme()
         }
         checkRadars(loc, kmh)
+        checkIncidents(loc)
+        announceIncidents(loc)
         maybeFetchLufop(loc)
         if (navigating) {
             recordTrip(loc, kmh)
@@ -2599,6 +2703,7 @@ class MainActivity : Activity() {
     private fun trafficPage(content: LinearLayout) {
         val c = card(content)
         sectionTitle(c, "TRAFIC EN TEMPS RÉEL", "#4DB6AC")
+        switchRow(c, "Accidents et incidents", "Accidents, bouchons, travaux, routes fermées, annonces vocales sur ton trajet", "incidents", true) { refreshIncidentLayer(); lastIncFetch = 0L; refreshPanel() }
         switchRow(c, "Afficher le trafic", "Vert fluide, orange ralenti, rouge bouchon", "traffic", false) { setupTraffic(); refreshPanel() }
         val c2 = card(content)
         sectionTitle(c2, "CLÉ TOMTOM (GRATUITE)", "#4DB6AC")
