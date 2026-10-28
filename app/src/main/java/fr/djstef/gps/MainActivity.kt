@@ -76,7 +76,7 @@ import kotlin.math.roundToInt
 class MainActivity : Activity() {
 
     companion object {
-        const val VERSION = "0.56"
+        const val VERSION = "0.57"
         private val SIGN_REF_RE = Regex("^([A-Z]{1,2}\\s?\\d{1,4}[A-Za-z]?)\\s*[·:-]\\s*(.*)$")
         private val VERS_RE = Regex("\\s+vers\\s+(.+)$")
         private val TURN_KINDS = setOf(15, 19, 21, 24, 3, 16, 14, 10, 18, 20, 23, 2, 9, 11, 12, 13)
@@ -767,7 +767,12 @@ class MainActivity : Activity() {
         tv.visibility = View.VISIBLE
     }
 
-    private fun isLandscape() = resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
+    /** Paysage = fenêtre nettement plus large que haute (et non l'orientation du téléphone : en écran partagé la fenêtre peut être carrée). */
+    private fun isLandscape(): Boolean {
+        val c = resources.configuration
+        if (c.screenWidthDp <= 0 || c.screenHeightDp <= 0) return resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
+        return c.screenWidthDp > c.screenHeightDp * 1.25f
+    }
 
     /** Mise en page selon l'orientation : en paysage, le guidage reste dans une colonne à gauche. */
     private fun applyLayout() {
@@ -817,7 +822,7 @@ class MainActivity : Activity() {
         val h = c.screenHeightDp
         if (h <= 0) return 1f
         val base = if (isLandscape()) 400f else 800f
-        return (h / base).coerceIn(0.55f, 1f)
+        return (h / base).coerceIn(0.6f, 1f)
     }
 
     private fun scaleView(v: View, f: Float, skip: View?, deep: Boolean) {
