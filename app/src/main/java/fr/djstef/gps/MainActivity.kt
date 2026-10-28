@@ -1391,7 +1391,6 @@ class MainActivity : Activity() {
         carView.translationY = y - py
         carView.visibility = View.VISIBLE
     }
-    }
 
     private fun applyCarMode() {
         val layer = style?.getLayerAs<SymbolLayer>("me-layer") ?: return
