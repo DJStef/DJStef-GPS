@@ -76,7 +76,7 @@ import kotlin.math.roundToInt
 class MainActivity : Activity() {
 
     companion object {
-        const val VERSION = "0.43"
+        const val VERSION = "0.44"
         const val STYLE_URL = "https://tiles.openfreemap.org/styles/liberty"
         const val STYLE_DARK = "https://tiles.openfreemap.org/styles/dark"
 
@@ -1270,12 +1270,13 @@ class MainActivity : Activity() {
         val dt = if (lastFrameNs == 0L) 0.016 else ((ns - lastFrameNs) / 1e9).coerceIn(0.001, 0.1)
         lastFrameNs = ns
         // Position estimée : dernier point GPS + vitesse × temps écoulé, dans la direction du déplacement
-        val age = ((android.os.SystemClock.elapsedRealtime() - fixAt) / 1000.0).coerceIn(0.0, 2.0)
+        // âge réel de la mesure GPS (et non de sa réception) : plus de recul à chaque nouveau point
+        val age = ((android.os.SystemClock.elapsedRealtimeNanos() / 1_000_000L - fixAt) / 1000.0).coerceIn(0.0, 2.5)
         val d = fixSpeed * age
         val br = Math.toRadians(fixBear.toDouble())
         val tLat = fixLat + d * Math.cos(br) / 111320.0
         val tLon = fixLon + d * Math.sin(br) / (111320.0 * Math.cos(Math.toRadians(fixLat)).coerceAtLeast(0.2))
-        val a = 1 - Math.exp(-dt / 0.2)
+        val a = 1 - Math.exp(-dt / 0.3)
         dLat += (tLat - dLat) * a
         dLon += (tLon - dLon) * a
         var diff = ((tBear - dBear + 540.0) % 360.0) - 180.0
@@ -1315,7 +1316,7 @@ class MainActivity : Activity() {
                     snapIdx = Geo.lastSnapIdx
                 }
             }
-            fixAt = android.os.SystemClock.elapsedRealtime()
+            fixAt = loc.elapsedRealtimeNanos / 1_000_000L
             val cp = m.cameraPosition
             val far = smInit && Geo.dist(Pt(dLat, dLon), Pt(loc.latitude, loc.longitude)) > 250.0
             if (!smInit || first || far) {
