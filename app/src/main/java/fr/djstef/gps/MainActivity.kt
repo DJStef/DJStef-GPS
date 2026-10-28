@@ -76,7 +76,7 @@ import kotlin.math.roundToInt
 class MainActivity : Activity() {
 
     companion object {
-        const val VERSION = "0.52"
+        const val VERSION = "0.53"
         private val VERS_RE = Regex("\\s+vers\\s+(.+)$")
         private val TURN_KINDS = setOf(15, 19, 21, 24, 3, 16, 14, 10, 18, 20, 23, 2, 9, 11, 12, 13)
         private val CONDENSED: Typeface = Typeface.create("sans-serif-condensed", Typeface.BOLD)
@@ -451,15 +451,15 @@ class MainActivity : Activity() {
         navBanner = LinearLayout(this)
         navBanner.orientation = LinearLayout.HORIZONTAL
         navBanner.gravity = Gravity.CENTER_VERTICAL
-        navBanner.background = gradBg(GREEN, 18)
-        navBanner.setPadding(dp(12), dp(8), dp(12), dp(8))
-        navBanner.background.alpha = 222
+        navBanner.background = colorBg("#1E7B34", 22)
+        navBanner.setPadding(dp(12), dp(12), dp(14), dp(12))
+        navBanner.elevation = dp(6).toFloat()
         navBanner.visibility = View.GONE
         navArrow = ManeuverView(this)
-        navBanner.addView(navArrow, LinearLayout.LayoutParams(dp(68), dp(68)))
+        navBanner.addView(navArrow, LinearLayout.LayoutParams(dp(76), dp(76)))
         val navCol = LinearLayout(this)
         navCol.orientation = LinearLayout.VERTICAL
-        navDist = label("", 26f, true).also { it.typeface = CONDENSED }
+        navDist = label("", 40f, true).also { it.typeface = CONDENSED }
         navToward = label("", 18f, true)
         navToward.maxLines = 2
         navToward.ellipsize = android.text.TextUtils.TruncateAt.END
@@ -483,13 +483,13 @@ class MainActivity : Activity() {
         radarBox = LinearLayout(this)
         radarBox.orientation = LinearLayout.HORIZONTAL
         radarBox.gravity = Gravity.CENTER_VERTICAL
-        radarBox.background = gradBg(RED, 18)
-        radarBox.setPadding(dp(8), dp(5), dp(12), dp(5))
-        radarBox.background.alpha = 222
+        radarBox.background = colorBg("#C62828", 18)
+        radarBox.setPadding(dp(10), dp(8), dp(14), dp(8))
+        radarBox.elevation = dp(4).toFloat()
         radarBox.visibility = View.GONE
         radarIcon = ImageView(this)
         radarBox.addView(radarIcon, LinearLayout.LayoutParams(dp(40), dp(40)))
-        radarText = label("", 16f, true)
+        radarText = label("", 18f, true)
         radarBox.addView(radarText, LinearLayout.LayoutParams(0, -2, 1f).also { it.leftMargin = dp(10) })
         topBox.addView(radarBox, LinearLayout.LayoutParams(-1, -2).also { it.topMargin = dp(6) })
 
@@ -976,7 +976,7 @@ class MainActivity : Activity() {
         )
         st.addLayer(
             LineLayer("route-layer", "route").withProperties(
-                PropertyFactory.lineColor("#1A4FB5"),
+                PropertyFactory.lineColor(Expression.get("c")),
                 PropertyFactory.lineWidth(Expression.interpolate(Expression.exponential(1.6f), Expression.zoom(), Expression.stop(8, 3f), Expression.stop(12, 5f), Expression.stop(15, 8f), Expression.stop(17, 13f), Expression.stop(19, 22f))),
                 PropertyFactory.lineCap(Property.LINE_CAP_ROUND),
                 PropertyFactory.lineJoin(Property.LINE_JOIN_ROUND)
@@ -1063,12 +1063,64 @@ class MainActivity : Activity() {
         me?.let { moveCamera(it, true) }
     }
 
+    /** Couleur de chaque tronçon de l'itinéraire selon le trafic (null = bleu normal). */
+    private var routeCols: Array<String?>? = null
+
+    private fun routeGeo(r: Route): FeatureCollection {
+        val cols = routeCols
+        val n = r.pts.size
+        if (cols == null || cols.size != n || n < 2) {
+            val f = Feature.fromGeometry(LineString.fromLngLats(r.pts.map { Point.fromLngLat(it.lon, it.lat) }))
+            f.addStringProperty("c", "#1A4FB5")
+            return FeatureCollection.fromFeatures(listOf(f))
+        }
+        val out = ArrayList<Feature>()
+        var start = 0
+        var cur = cols[0] ?: "#1A4FB5"
+        for (i in 1 until n) {
+            val c = (if (i < n) cols[i] else null) ?: "#1A4FB5"
+            if (c != cur || i == n - 1) {
+                val end = if (c != cur) i else i
+                val f = Feature.fromGeometry(LineString.fromLngLats((start..end).map { Point.fromLngLat(r.pts[it].lon, r.pts[it].lat) }))
+                f.addStringProperty("c", cur)
+                out.add(f)
+                start = i
+                cur = c
+            }
+        }
+        return FeatureCollection.fromFeatures(out)
+    }
+
+    private fun paintTraffic(r: Route, secs: List<TrafSec>) {
+        scope.launch {
+            val cols = withContext(Dispatchers.Default) {
+                val a = arrayOfNulls<String>(r.pts.size)
+                for (sc in secs) {
+                    val s0 = Geo.snap(sc.from, r.pts, 0, r.pts.size - 1) ?: continue
+                    val i0 = Geo.lastSnapIdx
+                    val s1 = Geo.snap(sc.to, r.pts, 0, r.pts.size - 1) ?: continue
+                    val i1 = Geo.lastSnapIdx
+                    if (s0.third > 120.0 || s1.third > 120.0) continue
+                    val lo = minOf(i0, i1)
+                    val hi = maxOf(i0, i1)
+                    for (k in lo..hi.coerceAtMost(a.size - 1)) {
+                        // le plus grave l'emporte (rouge > orange)
+                        if (a[k] == null || sc.color == "#D32F2F") a[k] = sc.color
+                    }
+                }
+                a
+            }
+            if (route === r) {
+                routeCols = cols
+                style?.getSourceAs<GeoJsonSource>("route")?.setGeoJson(routeGeo(r))
+            }
+        }
+    }
+
     private fun redrawRoute() {
         val st = style ?: return
         route?.let { r ->
-            st.getSourceAs<GeoJsonSource>("route")?.setGeoJson(
-                Feature.fromGeometry(LineString.fromLngLats(r.pts.map { Point.fromLngLat(it.lon, it.lat) }))
-            )
+            st.getSourceAs<GeoJsonSource>("route")?.setGeoJson(routeGeo(r))
         }
         dest?.let { st.getSourceAs<GeoJsonSource>("dest")?.setGeoJson(point(it)) }
     }
@@ -1913,9 +1965,9 @@ class MainActivity : Activity() {
         nearSaid = -1
         offCount = 0
         trafficEta = null
-        style?.getSourceAs<GeoJsonSource>("route")?.setGeoJson(
-            Feature.fromGeometry(LineString.fromLngLats(r.pts.map { Point.fromLngLat(it.lon, it.lat) }))
-        )
+        routeCols = null
+        lastEtaFetch = 0L
+        style?.getSourceAs<GeoJsonSource>("route")?.setGeoJson(routeGeo(r))
         val extra = buildString {
             if (radars.isNotEmpty()) append(" · ${radars.size} radar(s) sur le trajet")
             if (info.isNotEmpty()) append(" ($info)")
@@ -2013,6 +2065,7 @@ class MainActivity : Activity() {
                 val delay = res.second
                 trafficEta = Pair(sec, System.currentTimeMillis())
                 trafficDelay = delay
+                route?.let { paintTraffic(it, res.third) }
                 if (preview && !navigating) {
                     etaView.text = "Arrivée ${eta(sec)}"
                     val r = route

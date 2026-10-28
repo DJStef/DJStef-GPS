@@ -249,14 +249,42 @@ object Nearby {
 
 // ---------- Heure estimée avec trafic (TomTom Routing) ----------
 
+data class TrafSec(val from: Pt, val to: Pt, val color: String)
+
 object TomTomEta {
-    /** Retourne (durée avec trafic en s, retard dû au trafic en s). */
-    suspend fun eta(key: String, a: Pt, b: Pt): Pair<Double, Double>? = withContext(Dispatchers.IO) {
+    /** Retourne (durée avec trafic en s, retard dû au trafic en s, tronçons ralentis colorés). */
+    suspend fun eta(key: String, a: Pt, b: Pt): Triple<Double, Double, List<TrafSec>>? = withContext(Dispatchers.IO) {
         val url = "https://api.tomtom.com/routing/1/calculateRoute/${a.lat},${a.lon}:${b.lat},${b.lon}/json" +
-            "?key=${URLEncoder.encode(key, "UTF-8")}&traffic=true&travelMode=car"
+            "?key=${URLEncoder.encode(key, "UTF-8")}&traffic=true&travelMode=car&sectionType=traffic"
         val root = JSONObject(Http.get(url, 20000))
-        val sum = root.getJSONArray("routes").getJSONObject(0).getJSONObject("summary")
-        Pair(sum.getDouble("travelTimeInSeconds"), sum.optDouble("trafficDelayInSeconds", 0.0))
+        val route = root.getJSONArray("routes").getJSONObject(0)
+        val sum = route.getJSONObject("summary")
+        val pts = ArrayList<Pt>()
+        val legs = route.optJSONArray("legs")
+        if (legs != null) for (l in 0 until legs.length()) {
+            val p = legs.getJSONObject(l).optJSONArray("points") ?: continue
+            for (i in 0 until p.length()) pts.add(Pt(p.getJSONObject(i).getDouble("latitude"), p.getJSONObject(i).getDouble("longitude")))
+        }
+        val secs = ArrayList<TrafSec>()
+        val arr = route.optJSONArray("sections")
+        if (arr != null) for (i in 0 until arr.length()) {
+            val o = arr.getJSONObject(i)
+            if (o.optString("sectionType") != "TRAFFIC") continue
+            val s0 = o.optInt("startPointIndex", -1)
+            val s1 = o.optInt("endPointIndex", -1)
+            if (s0 < 0 || s1 >= pts.size || s1 < s0) continue
+            val mag = o.optInt("magnitudeOfDelay", 0)
+            val cat = o.optString("simpleCategory", "")
+            val color = when {
+                cat == "ROAD_CLOSURE" || mag >= 3 -> "#D32F2F"
+                cat == "JAM" || mag == 2 -> "#D32F2F"
+                mag == 1 || cat == "ROAD_WORK" || cat == "OTHER" -> "#FF9F1C"
+                else -> null
+            } ?: continue
+            if (cat == "ROAD_WORK" && mag == 0) continue
+            secs.add(TrafSec(pts[s0], pts[s1], color))
+        }
+        Triple(sum.getDouble("travelTimeInSeconds"), sum.optDouble("trafficDelayInSeconds", 0.0), secs)
     }
 }
 
