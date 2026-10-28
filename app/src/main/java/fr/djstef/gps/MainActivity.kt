@@ -76,7 +76,7 @@ import kotlin.math.roundToInt
 class MainActivity : Activity() {
 
     companion object {
-        const val VERSION = "0.38"
+        const val VERSION = "0.39"
         const val STYLE_URL = "https://tiles.openfreemap.org/styles/liberty"
         const val STYLE_DARK = "https://tiles.openfreemap.org/styles/dark"
 
@@ -512,14 +512,18 @@ class MainActivity : Activity() {
         sideMore.orientation = LinearLayout.VERTICAL
         sideMore.visibility = View.GONE
         moreBtn = circleBtn("☰", 44) {
-            sideMore.visibility = if (sideMore.visibility == View.VISIBLE) View.GONE else View.VISIBLE
-            moreBtn.text = if (sideMore.visibility == View.VISIBLE) "✕" else "☰"
+            if (sideMore.visibility == View.VISIBLE) closeSide() else openSide()
         }
-        sideBtns = listOf(recBtn, repBtn, trafficBtn, zin, zout, muteBtn, viewBtn, moreBtn)
+        val setBtn = circleBtn("⚙", 44) { closeSide(); showMenu(null) }
+        sideBtns = listOf(recBtn, repBtn, trafficBtn, zin, zout, muteBtn, viewBtn, setBtn, moreBtn)
         for (b in sideBtns) {
             b.alpha = 0.82f
             (b.layoutParams as LinearLayout.LayoutParams).topMargin = dp(8)
-            if (b !== moreBtn) sideMore.addView(b)
+            if (b !== moreBtn) {
+                sideMore.addView(b)
+                // chaque appui sur un bouton relance le décompte de 3 secondes
+                b.setOnTouchListener { _, e -> if (e.action == android.view.MotionEvent.ACTION_DOWN) armSideClose(); false }
+            }
         }
         side.addView(sideMore)
         side.addView(moreBtn)
@@ -616,7 +620,10 @@ class MainActivity : Activity() {
         }
         // Gauche : bouton ✕ pour arrêter ; centre : durée, distance · arrivée, destination
         val navStop = circleBtn("✕", 48) { stopNavigation() }
-        navStop.background = Gloss.oval(Color.parseColor(RED))
+        navStop.background = GradientDrawable().also { it.shape = GradientDrawable.OVAL; it.setColor(Color.parseColor(RED)) }
+        navStop.elevation = 0f
+        navStop.alpha = 1f
+        navStop.textSize = 22f
         navBand.addView(navStop)
         val navInfoCol = LinearLayout(this)
         navInfoCol.orientation = LinearLayout.VERTICAL
@@ -661,6 +668,25 @@ class MainActivity : Activity() {
 
         setContentView(root)
         updateModeButtons()
+    }
+
+    private val sideClose = Runnable { closeSide() }
+
+    private fun armSideClose() {
+        sideMore.removeCallbacks(sideClose)
+        sideMore.postDelayed(sideClose, 3000)
+    }
+
+    private fun openSide() {
+        sideMore.visibility = View.VISIBLE
+        moreBtn.text = "✕"
+        armSideClose()
+    }
+
+    private fun closeSide() {
+        sideMore.removeCallbacks(sideClose)
+        sideMore.visibility = View.GONE
+        moreBtn.text = "☰"
     }
 
     /** Le bouton de menu se pose juste au-dessus du bandeau du bas, à droite. */

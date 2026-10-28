@@ -85,13 +85,8 @@ class SignView(ctx: Context) : View(ctx) {
         val cy = height / 2f
         val r = s / 2f - dpToPx(context, 4f)
 
-        // Ombre portée
         p.shader = null
         p.style = Paint.Style.FILL
-        p.color = 0x88000000.toInt()
-        p.maskFilter = android.graphics.BlurMaskFilter(dpToPx(context, 5f), android.graphics.BlurMaskFilter.Blur.NORMAL)
-        c.drawCircle(cx + dpToPx(context, 1.5f), cy + dpToPx(context, 3f), r, p)
-        p.maskFilter = null
 
         // Cadre métallique (dégradé conique)
         p.shader = SweepGradient(
@@ -103,17 +98,17 @@ class SignView(ctx: Context) : View(ctx) {
 
         // Anneau rouge bombé
         val rr = r * 0.9f
-        p.shader = RadialGradient(cx - rr * 0.3f, cy - rr * 0.4f, rr * 1.5f, intArrayOf(0xFFFF6B5E.toInt(), 0xFFD32F2F.toInt(), 0xFF8E1111.toInt()), floatArrayOf(0f, 0.55f, 1f), Shader.TileMode.CLAMP)
+        p.shader = RadialGradient(cx - rr * 0.3f, cy - rr * 0.4f, rr * 1.5f, intArrayOf(0xFFE53935.toInt(), 0xFFD32F2F.toInt(), 0xFFB71C1C.toInt()), floatArrayOf(0f, 0.55f, 1f), Shader.TileMode.CLAMP)
         c.drawCircle(cx, cy, rr, p)
 
         // Face blanche en creux
         val fr = r * 0.66f
-        p.shader = RadialGradient(cx - fr * 0.3f, cy - fr * 0.4f, fr * 1.6f, intArrayOf(0xFFFFFFFF.toInt(), 0xFFF1F1F1.toInt(), 0xFFC9CCD1.toInt()), floatArrayOf(0f, 0.6f, 1f), Shader.TileMode.CLAMP)
+        p.shader = RadialGradient(cx - fr * 0.3f, cy - fr * 0.4f, fr * 1.6f, intArrayOf(0xFFFFFFFF.toInt(), 0xFFFFFFFF.toInt(), 0xFFF2F2F2.toInt()), floatArrayOf(0f, 0.6f, 1f), Shader.TileMode.CLAMP)
         c.drawCircle(cx, cy, fr, p)
         p.shader = null
         p.style = Paint.Style.STROKE
         p.strokeWidth = dpToPx(context, 1.5f)
-        p.color = 0x55000000
+        p.color = 0xFFB0B0B0.toInt()
         c.drawCircle(cx, cy, fr, p)
 
         // Chiffre en relief
@@ -123,8 +118,6 @@ class SignView(ctx: Context) : View(ctx) {
         p.textSize = if (txt.length >= 3) fr * 0.95f else fr * 1.15f
         p.textAlign = Paint.Align.CENTER
         val ty = cy - (p.descent() + p.ascent()) / 2f
-        p.color = 0x66FFFFFF
-        c.drawText(txt, cx + 1.5f, ty + 1.5f, p)
         p.color = 0xFF111111.toInt()
         c.drawText(txt, cx, ty, p)
 
