@@ -13,7 +13,7 @@ android {
         targetSdk = 34
         // Le numéro de build GitHub garantit que chaque APK s'installe par-dessus le précédent.
         versionCode = (System.getenv("GITHUB_RUN_NUMBER") ?: "1").toInt()
-        versionName = "0.64"
+        versionName = "0.65"
     }
 
     // La clé de signature est générée et conservée par le workflow GitHub (jamais dans le dépôt).
@@ -50,6 +50,5 @@ android {
 
 dependencies {
     implementation("org.maplibre.gl:android-sdk:11.5.2")
-    implementation("androidx.car.app:app:1.4.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
 }

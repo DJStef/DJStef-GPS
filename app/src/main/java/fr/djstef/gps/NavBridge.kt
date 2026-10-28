@@ -3,7 +3,7 @@ package fr.djstef.gps
 import android.location.Location
 import java.util.concurrent.CopyOnWriteArrayList
 
-/** Pont entre l'activité du téléphone (moteur de navigation) et l'écran Android Auto. */
+/** Pont d'état de navigation partagé entre l'activité et les autres composants. */
 object NavBridge {
     var navigating = false
     var route: Route? = null
