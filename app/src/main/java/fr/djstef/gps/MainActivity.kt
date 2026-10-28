@@ -76,7 +76,7 @@ import kotlin.math.roundToInt
 class MainActivity : Activity() {
 
     companion object {
-        const val VERSION = "0.30"
+        const val VERSION = "0.31"
         const val STYLE_URL = "https://tiles.openfreemap.org/styles/liberty"
         const val STYLE_DARK = "https://tiles.openfreemap.org/styles/dark"
 
@@ -1110,14 +1110,102 @@ class MainActivity : Activity() {
         src.setGeoJson(f)
     }
 
+    // --- Suivi fluide : la caméra est déplacée à chaque image (≈60 fois/s) vers la position estimée ---
+    private var smRunning = false
+    private var smInit = false
+    private var fixLat = 0.0
+    private var fixLon = 0.0
+    private var fixSpeed = 0.0
+    private var fixBear = 0f
+    private var fixAt = 0L
+    private var dLat = 0.0
+    private var dLon = 0.0
+    private var dBear = 0.0
+    private var dZoom = 17.0
+    private var dTilt = 0.0
+    private var tZoom = 17.0
+    private var tTilt = 0.0
+    private var tBear = 0.0
+    private var lastFrameNs = 0L
+    private val frameCb = object : android.view.Choreographer.FrameCallback {
+        override fun doFrame(frameTimeNanos: Long) {
+            if (!smRunning) return
+            smStep(frameTimeNanos)
+            android.view.Choreographer.getInstance().postFrameCallback(this)
+        }
+    }
+
+    private fun smStart() {
+        if (smRunning) return
+        smRunning = true
+        lastFrameNs = 0L
+        android.view.Choreographer.getInstance().postFrameCallback(frameCb)
+    }
+
+    private fun smStop() {
+        smRunning = false
+        smInit = false
+    }
+
+    private fun smStep(ns: Long) {
+        val m = map
+        if (m == null || !navigating || !follow) { smStop(); return }
+        val dt = if (lastFrameNs == 0L) 0.016 else ((ns - lastFrameNs) / 1e9).coerceIn(0.001, 0.1)
+        lastFrameNs = ns
+        // Position estimée : dernier point GPS + vitesse × temps écoulé, dans la direction du déplacement
+        val age = ((android.os.SystemClock.elapsedRealtime() - fixAt) / 1000.0).coerceIn(0.0, 2.0)
+        val d = fixSpeed * age
+        val br = Math.toRadians(fixBear.toDouble())
+        val tLat = fixLat + d * Math.cos(br) / 111320.0
+        val tLon = fixLon + d * Math.sin(br) / (111320.0 * Math.cos(Math.toRadians(fixLat)).coerceAtLeast(0.2))
+        val a = 1 - Math.exp(-dt / 0.2)
+        dLat += (tLat - dLat) * a
+        dLon += (tLon - dLon) * a
+        var diff = ((tBear - dBear + 540.0) % 360.0) - 180.0
+        dBear = (dBear + diff * (1 - Math.exp(-dt / 0.45)) + 360.0) % 360.0
+        val a2 = 1 - Math.exp(-dt / 0.7)
+        dZoom += (tZoom - dZoom) * a2
+        dTilt += (tTilt - dTilt) * a2
+        m.moveCamera(CameraUpdateFactory.newCameraPosition(
+            CameraPosition.Builder().target(LatLng(dLat, dLon)).zoom(dZoom).tilt(dTilt).bearing(dBear).build()
+        ))
+        positionCar()
+    }
+
     private fun moveCamera(loc: Location, first: Boolean = false) {
         val m = map ?: return
+        if (navigating && follow) {
+            val kmh = if (loc.hasSpeed()) loc.speed * 3.6 else 0.0
+            val manual = prefs.float("navZoom", 0f).toDouble()
+            val auto = if (kmh < 30) 18.0 else if (kmh < 70) 17.3 else if (kmh < 100) 16.6 else 16.0
+            tZoom = ((if (manual > 0) manual else auto) + zoomBoost).coerceIn(13.0, 20.5)
+            tTilt = if (prefs.bool("view3d", true)) 60.0 else 0.0
+            tBear = if (prefs.bool("northUp", false)) 0.0 else lastBearing.toDouble()
+            fixLat = loc.latitude
+            fixLon = loc.longitude
+            fixSpeed = if (loc.hasSpeed() && loc.speed > 1.0f) loc.speed.toDouble() else 0.0
+            fixBear = if (loc.hasBearing() && loc.speed > 1.5f) loc.bearing else lastBearing
+            fixAt = android.os.SystemClock.elapsedRealtime()
+            val cp = m.cameraPosition
+            val far = smInit && Geo.dist(Pt(dLat, dLon), Pt(loc.latitude, loc.longitude)) > 250.0
+            if (!smInit || first || far) {
+                val c = cp.target
+                dLat = c?.latitude ?: loc.latitude
+                dLon = c?.longitude ?: loc.longitude
+                dBear = cp.bearing
+                dZoom = cp.zoom
+                dTilt = cp.tilt
+                smInit = true
+            }
+            smStart()
+            return
+        }
+        smStop()
         val b = CameraPosition.Builder().target(LatLng(loc.latitude, loc.longitude))
         if (navigating) {
             val kmh = if (loc.hasSpeed()) loc.speed * 3.6 else 0.0
             val manual = prefs.float("navZoom", 0f).toDouble()
             val auto = if (kmh < 30) 18.0 else if (kmh < 70) 17.3 else if (kmh < 100) 16.6 else 16.0
-            // Zoom choisi (ou automatique selon la vitesse) + zoom d'approche des ronds-points et virages
             b.zoom(((if (manual > 0) manual else auto) + zoomBoost).coerceIn(13.0, 20.5))
             b.tilt(if (prefs.bool("view3d", true)) 60.0 else 0.0)
             b.bearing(if (prefs.bool("northUp", false)) 0.0 else lastBearing.toDouble())

@@ -265,6 +265,25 @@ object Geocoder {
                 // Zone proche (~45 km) puis zone large (~150 km), en parallèle
                 jobs += async { push(true, byName(core, near.lat, near.lon, 0.4)); if (w0 != null) push(true, byName(q, near.lat, near.lon, 0.4)) }
                 jobs += async { push(true, byName(core, near.lat, near.lon, 1.4)) }
+                // « gmtp mauguio » sans séparateur : on essaie aussi sans le dernier mot (probable nom de ville)
+                if (w0 == null && ws.size >= 2) {
+                    val head = ws.dropLast(1).joinToString(" ")
+                    jobs += async { push(true, byName(head, near.lat, near.lon, 1.4)) }
+                    jobs += async {
+                        try {
+                            val d = 1.4
+                            val dl = d / Math.cos(Math.toRadians(near.lat)).coerceAtLeast(0.2)
+                            val vb = "${near.lon - dl},${near.lat + d},${near.lon + dl},${near.lat - d}"
+                            delay(1100)
+                            val arr = JSONArray(Http.get("https://nominatim.openstreetmap.org/search?format=jsonv2&limit=10&accept-language=fr&bounded=1&viewbox=$vb&q=" +
+                                URLEncoder.encode(head, "UTF-8"), 7000))
+                            push(true, (0 until arr.length()).map { arr.getJSONObject(it) }.map {
+                                Place(it.getString("display_name"), Pt(it.getString("lat").toDouble(), it.getString("lon").toDouble()))
+                            })
+                        } catch (_: Exception) {
+                        }
+                    }
+                }
                 // Nominatim limité à la zone large (trouve aussi les noms courts / sigles)
                 jobs += async {
                     try {
