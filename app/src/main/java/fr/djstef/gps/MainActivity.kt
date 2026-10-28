@@ -76,7 +76,7 @@ import kotlin.math.roundToInt
 class MainActivity : Activity() {
 
     companion object {
-        const val VERSION = "0.40"
+        const val VERSION = "0.41"
         const val STYLE_URL = "https://tiles.openfreemap.org/styles/liberty"
         const val STYLE_DARK = "https://tiles.openfreemap.org/styles/dark"
 
@@ -2104,7 +2104,19 @@ class MainActivity : Activity() {
                 alerted.remove(r.id)
                 continue
             }
-            if (moving && Geo.angleDiff(loc.bearing.toDouble(), Geo.bearing(p, r.pt)) > 50.0) continue
+            val rt = route
+            if (navigating && rt != null && rt.pts.size > 2) {
+                // Guidage : seuls comptent les radars posés sur NOTRE itinéraire, devant nous (pas la route parallèle)
+                val from = (snapIdx - 3).coerceIn(0, rt.pts.size - 2)
+                val ahead = rt.pts.subList(from, minOf(rt.pts.size, from + 1500))
+                if (Geo.distToRoute(r.pt, ahead) > 30.0) continue
+            } else if (moving) {
+                // Hors guidage : dans le sens de la marche et près de l'axe de la route suivie
+                val ang = Geo.angleDiff(loc.bearing.toDouble(), Geo.bearing(p, r.pt))
+                if (ang > 35.0) continue
+                val lateral = d * Math.sin(Math.toRadians(ang))
+                if (d > 60.0 && lateral > 30.0) continue
+            }
             if (d < bestD) {
                 bestD = d
                 best = r
