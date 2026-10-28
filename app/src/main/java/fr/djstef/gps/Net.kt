@@ -877,9 +877,9 @@ object RadarRepository {
 
     private fun kindName(code: String): String = when (code.trim().uppercase()) {
         "ETF" -> "Radar fixe"
-        "ETD" -> "Radar discriminant"
-        "ETT" -> "Radar tourelle"
-        "ETU" -> "Radar urbain"
+        "ETD" -> "Radar fixe"
+        "ETT" -> "Radar fixe"
+        "ETU" -> "Radar fixe"
         "ETVM" -> "Radar vitesse moyenne"
         "ETFR" -> "Radar feu rouge"
         "ETPN" -> "Radar passage à niveau"

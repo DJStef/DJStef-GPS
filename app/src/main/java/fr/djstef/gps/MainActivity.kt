@@ -76,7 +76,7 @@ import kotlin.math.roundToInt
 class MainActivity : Activity() {
 
     companion object {
-        const val VERSION = "0.58"
+        const val VERSION = "0.59"
         private val SIGN_REF_RE = Regex("^([A-Z]{1,2}\\s?\\d{1,4}[A-Za-z]?)\\s*[·:-]\\s*(.*)$")
         private val VERS_RE = Regex("\\s+vers\\s+(.+)$")
         private val TURN_KINDS = setOf(15, 19, 21, 24, 3, 16, 14, 10, 18, 20, 23, 2, 9, 11, 12, 13)
@@ -2537,16 +2537,16 @@ class MainActivity : Activity() {
             return
         }
         val lim = if (b.limit != null) " · limité à ${b.limit}" else ""
-        radarText.text = "${b.kind} dans ${bestD.roundToInt()} m$lim"
+        radarText.text = "${RadarArt.key(b.kind)} dans ${bestD.roundToInt()} m$lim"
         NavBridge.radarText = radarText.text.toString()
-        NavBridge.radarType = b.kind
+        NavBridge.radarType = RadarArt.key(b.kind)
         radarIcon.setImageBitmap(RadarArt.bitmap(RadarArt.key(b.kind), 128))
         radarBox.visibility = View.VISIBLE
         if (b.id !in alerted) {
             alerted.add(b.id)
             if (prefs.bool("radarAlert", true)) {
                 val over = if (b.limit != null && kmh > b.limit + 2) ", vous dépassez la limite" else ""
-                speak("${b.kind} dans ${distSay(bestD)}$over")
+                speak("${RadarArt.key(b.kind)} dans ${distSay(bestD)}$over")
             }
         }
     }
