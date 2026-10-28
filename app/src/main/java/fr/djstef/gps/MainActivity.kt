@@ -76,7 +76,7 @@ import kotlin.math.roundToInt
 class MainActivity : Activity() {
 
     companion object {
-        const val VERSION = "0.62"
+        const val VERSION = "0.63"
         private val EURO_RE = Regex("^E\\s?\\d{1,3}$")
         private val SIGN_REF_RE = Regex("^([A-Z]{1,2}\\s?\\d{1,4}[A-Za-z]?)\\s*[·:-]\\s*(.*)$")
         private val VERS_RE = Regex("\\s+vers\\s+(.+)$")
@@ -469,14 +469,14 @@ class MainActivity : Activity() {
         navBanner.orientation = LinearLayout.HORIZONTAL
         navBanner.gravity = Gravity.CENTER_VERTICAL
         navBanner.background = colorBg("#1E7B34", 22)
-        navBanner.setPadding(dp(12), dp(12), dp(14), dp(12))
+        navBanner.setPadding(dp(12), dp(7), dp(14), dp(7))
         navBanner.elevation = dp(6).toFloat()
         navBanner.visibility = View.GONE
         navArrow = ManeuverView(this)
-        navBanner.addView(navArrow, LinearLayout.LayoutParams(dp(76), dp(76)))
+        navBanner.addView(navArrow, LinearLayout.LayoutParams(dp(66), dp(66)))
         val navCol = LinearLayout(this)
         navCol.orientation = LinearLayout.VERTICAL
-        navDist = label("", 40f, true).also { it.typeface = CONDENSED }
+        navDist = label("", 36f, true).also { it.typeface = CONDENSED }
         navToward = label("", 18f, true)
         navToward.maxLines = 2
         navToward.ellipsize = android.text.TextUtils.TruncateAt.END
@@ -504,7 +504,7 @@ class MainActivity : Activity() {
         radarBox.orientation = LinearLayout.HORIZONTAL
         radarBox.gravity = Gravity.CENTER_VERTICAL
         radarBox.background = colorBg("#C62828", 18)
-        radarBox.setPadding(dp(10), dp(8), dp(14), dp(8))
+        radarBox.setPadding(dp(10), dp(5), dp(14), dp(5))
         radarBox.elevation = dp(4).toFloat()
         radarBox.visibility = View.GONE
         radarIcon = ImageView(this)
@@ -798,9 +798,9 @@ class MainActivity : Activity() {
         val w = resources.displayMetrics.widthPixels
         val colW = if (land) (w * 0.46).toInt() else FrameLayout.LayoutParams.MATCH_PARENT
         (topBox.layoutParams as FrameLayout.LayoutParams).also { it.width = colW; topBox.layoutParams = it }
-        topBox.setPadding(dp(10) + leftInset, topInset + dp(4), if (land) dp(10) else dp(10) + rightInset, 0)
+        topBox.setPadding(dp(10) + leftInset, (topInset - dp(6)).coerceAtLeast(dp(2)), if (land) dp(10) else dp(10) + rightInset, 0)
         (bottomBox.layoutParams as FrameLayout.LayoutParams).also { it.width = colW; bottomBox.layoutParams = it }
-        val sz = if (land) 70 else 84
+        val sz = if (land) 62 else 74
         infoRow.orientation = if (land) LinearLayout.HORIZONTAL else LinearLayout.VERTICAL
         (limitView.layoutParams as LinearLayout.LayoutParams).also {
             it.width = dp(sz); it.height = dp(sz)
