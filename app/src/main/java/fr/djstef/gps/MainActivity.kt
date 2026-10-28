@@ -76,7 +76,10 @@ import kotlin.math.roundToInt
 class MainActivity : Activity() {
 
     companion object {
-        const val VERSION = "0.50"
+        const val VERSION = "0.51"
+        private val VERS_RE = Regex("\\s+vers\\s+(.+)$")
+        private val TURN_KINDS = setOf(15, 19, 21, 24, 3, 16, 14, 10, 18, 20, 23, 2, 9, 11, 12, 13)
+        private val CONDENSED: Typeface = Typeface.create("sans-serif-condensed", Typeface.BOLD)
         const val STYLE_URL = "https://tiles.openfreemap.org/styles/liberty"
         const val STYLE_DARK = "https://tiles.openfreemap.org/styles/dark"
 
@@ -456,7 +459,7 @@ class MainActivity : Activity() {
         navBanner.addView(navArrow, LinearLayout.LayoutParams(dp(68), dp(68)))
         val navCol = LinearLayout(this)
         navCol.orientation = LinearLayout.VERTICAL
-        navDist = label("", 24f, true)
+        navDist = label("", 26f, true).also { it.typeface = CONDENSED }
         navToward = label("", 18f, true)
         navToward.maxLines = 2
         navToward.ellipsize = android.text.TextUtils.TruncateAt.END
@@ -624,11 +627,11 @@ class MainActivity : Activity() {
         navStop.elevation = 0f
         navStop.alpha = 1f
         navStop.textSize = 22f
-        navEta = label("", 28f, true, "#81C784")
+        navEta = label("", 28f, true, "#81C784").also { it.typeface = CONDENSED }
         navEta.gravity = Gravity.CENTER
-        navSub = label("", 19f, true, "#E0E6F2")
+        navSub = label("", 19f, true, "#E0E6F2").also { it.typeface = CONDENSED }
         navSub.gravity = Gravity.START
-        navArr = label("", 19f, true, "#E0E6F2")
+        navArr = label("", 19f, true, "#E0E6F2").also { it.typeface = CONDENSED }
         navArr.gravity = Gravity.END
         val kmRow = LinearLayout(this)
         kmRow.orientation = LinearLayout.HORIZONTAL
@@ -2025,7 +2028,10 @@ class MainActivity : Activity() {
         val r = route ?: return
         val p = Pt(loc.latitude, loc.longitude)
 
-        if (Geo.distToRoute(p, r.pts) > 80.0) {
+        val offD = (Geo.snap(p, r.pts, snapIdx - 30, snapIdx + 400)?.third
+            ?: Geo.snap(p, r.pts, 0, r.pts.size - 1)?.third) ?: Double.MAX_VALUE
+        val offDist = if (offD > 80.0) Geo.distToRoute(p, r.pts) else offD
+        if (offDist > 80.0) {
             offCount++
             if (offCount >= 3 && !rerouting) {
                 rerouting = true
@@ -2059,7 +2065,7 @@ class MainActivity : Activity() {
         val remTime = if (r.dist > 0) r.dur * remain / r.dist else 0.0
         navArrow.set(next.kind, next.text)
         navDist.text = if (dNext >= 1000) String.format(Locale.FRANCE, "%.1f km", dNext / 1000) else "${(dNext / 10).roundToInt() * 10} m"
-        val vm = Regex("\\s+vers\\s+(.+)$").find(next.text)
+        val vm = VERS_RE.find(next.text)
         val toward = if (next.sign.isNotBlank()) next.sign else vm?.groupValues?.get(1)?.replace("/", " · ")?.let { "vers $it" } ?: ""
         val instr = if (next.sign.isBlank() && vm != null) next.text.removeRange(vm.range) else next.text
         navToward.text = toward
@@ -2081,7 +2087,7 @@ class MainActivity : Activity() {
         navDestV.text = destName.substringBefore(",") + (if (te != null && trafficDelay >= 120) " · trafic +${(trafficDelay / 60).roundToInt()} min" else "")
         // Zoom d'approche : rond-point (dès 300 m) et virages (dès 150 m), puis retour au zoom choisi
         val roundabout = next.kind == 26 || next.kind == 27
-        val turn = next.kind in setOf(15, 19, 21, 24, 3, 16, 14, 10, 18, 20, 23, 2, 9, 11, 12, 13)
+        val turn = next.kind in TURN_KINDS
         zoomBoost = if (roundabout && dNext < 300.0) 1.3 else if (turn && dNext < 150.0) 0.9 else 0.0
         NavBridge.nextKind = next.kind
         NavBridge.nextText = next.text
