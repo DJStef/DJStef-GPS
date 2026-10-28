@@ -76,7 +76,7 @@ import kotlin.math.roundToInt
 class MainActivity : Activity() {
 
     companion object {
-        const val VERSION = "0.47"
+        const val VERSION = "0.48"
         const val STYLE_URL = "https://tiles.openfreemap.org/styles/liberty"
         const val STYLE_DARK = "https://tiles.openfreemap.org/styles/dark"
 
@@ -610,8 +610,8 @@ class MainActivity : Activity() {
         creditView.setLinkTextColor(Color.parseColor("#90CAF9"))
         creditView.visibility = View.GONE // crédits déplacés dans Réglages > À propos
         navBand = LinearLayout(this)
-        navBand.orientation = LinearLayout.HORIZONTAL
-        navBand.gravity = Gravity.CENTER_VERTICAL
+        navBand.orientation = LinearLayout.VERTICAL
+        navBand.gravity = Gravity.CENTER_HORIZONTAL
         navBand.setBackgroundColor(Color.parseColor("#EE101828"))
         navBand.visibility = View.GONE
         navBand.setBackgroundColor(Color.TRANSPARENT)
@@ -625,10 +625,6 @@ class MainActivity : Activity() {
         navStop.elevation = 0f
         navStop.alpha = 1f
         navStop.textSize = 22f
-        navBand.addView(navStop)
-        val navInfoCol = LinearLayout(this)
-        navInfoCol.orientation = LinearLayout.VERTICAL
-        navInfoCol.gravity = Gravity.CENTER_HORIZONTAL
         navEta = label("", 28f, true, "#81C784")
         navEta.gravity = Gravity.CENTER
         navSub = label("", 19f, true, "#E0E6F2")
@@ -651,21 +647,26 @@ class MainActivity : Activity() {
         navSub.gravity = Gravity.CENTER_VERTICAL or Gravity.START
         navEta.gravity = Gravity.CENTER
         navArr.gravity = Gravity.CENTER_VERTICAL or Gravity.END
-        kmRow.addView(navSub, LinearLayout.LayoutParams(0, dp(36), 1f))
-        kmRow.addView(navEta, LinearLayout.LayoutParams(0, dp(40), 1.5f))
-        kmRow.addView(navArr, LinearLayout.LayoutParams(0, dp(36), 1f))
+        kmRow.addView(navSub, LinearLayout.LayoutParams(0, dp(44), 1f))
+        kmRow.addView(navEta, LinearLayout.LayoutParams(0, dp(48), 1.5f))
+        kmRow.addView(navArr, LinearLayout.LayoutParams(0, dp(44), 1f))
         navDestV = label("", 16f, false, "#B8C2D6")
         navDestV.gravity = Gravity.CENTER
         navDestV.maxLines = 2
         navDestV.ellipsize = android.text.TextUtils.TruncateAt.END
         navDestV.setAutoSizeTextTypeUniformWithConfiguration(11, 16, 1, android.util.TypedValue.COMPLEX_UNIT_SP)
-        navInfoCol.addView(kmRow, LinearLayout.LayoutParams(-1, -2))
-        navInfoCol.addView(navDestV)
-        navBand.addView(navInfoCol, LinearLayout.LayoutParams(0, -2, 1f).also { it.leftMargin = dp(8); it.rightMargin = dp(8) })
+        // Ligne du haut : chiffres écartés aux extrémités ; ligne du bas : ✕ · destination · itinéraires alternatifs
+        navBand.addView(kmRow, LinearLayout.LayoutParams(-1, -2).also { it.topMargin = dp(4) })
         val altBtn = circleBtn("⇄", 48) { alternativesDialog() }
         altBtn.elevation = 0f
         altBtn.textSize = 22f
-        navBand.addView(altBtn)
+        val botRow = LinearLayout(this)
+        botRow.orientation = LinearLayout.HORIZONTAL
+        botRow.gravity = Gravity.CENTER_VERTICAL
+        botRow.addView(navStop)
+        botRow.addView(navDestV, LinearLayout.LayoutParams(0, -2, 1f).also { it.leftMargin = dp(10); it.rightMargin = dp(10) })
+        botRow.addView(altBtn)
+        navBand.addView(botRow, LinearLayout.LayoutParams(-1, -2).also { it.topMargin = dp(8); it.bottomMargin = dp(6) })
         bottomBox.addView(navBand, LinearLayout.LayoutParams(-1, -2))
         bottomBox.addView(creditView, LinearLayout.LayoutParams(-1, -2).also { it.topMargin = dp(4) })
 
