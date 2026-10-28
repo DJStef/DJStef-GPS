@@ -76,7 +76,7 @@ import kotlin.math.roundToInt
 class MainActivity : Activity() {
 
     companion object {
-        const val VERSION = "0.31"
+        const val VERSION = "0.32"
         const val STYLE_URL = "https://tiles.openfreemap.org/styles/liberty"
         const val STYLE_DARK = "https://tiles.openfreemap.org/styles/dark"
 
@@ -571,7 +571,7 @@ class MainActivity : Activity() {
         creditView.setShadowLayer(3f, 0f, 1f, Color.BLACK)
         android.text.util.Linkify.addLinks(creditView, android.text.util.Linkify.WEB_URLS)
         creditView.setLinkTextColor(Color.parseColor("#90CAF9"))
-        creditView.visibility = if (prefs.str("lufopKey", "").isNotBlank()) View.VISIBLE else View.GONE
+        creditView.visibility = View.GONE // crédits déplacés dans Réglages > À propos
         navBand = LinearLayout(this)
         navBand.orientation = LinearLayout.HORIZONTAL
         navBand.gravity = Gravity.CENTER_VERTICAL
@@ -1459,6 +1459,7 @@ class MainActivity : Activity() {
                     else if (Geocoder.diag.isNotBlank()) addRow("ℹ v$VERSION · " + Geocoder.diag, {})
                     setResults(true)
                 }
+                Geocoder.googleKey = prefs.str("googleKey", "")
                 render(emptyList(), false)
                 val res = Geocoder.search(q, me?.let { Pt(it.latitude, it.longitude) }) { part ->
                     scope.launch { render(part, false) }
@@ -2543,6 +2544,21 @@ class MainActivity : Activity() {
     }
 
     private fun destPage(content: LinearLayout) {
+        val cg = card(content)
+        sectionTitle(cg, "RECHERCHE GOOGLE (FACULTATIF)", GREEN)
+        cg.addView(label("Avec une clé Google Places API (New), la recherche utilise Google en premier : entreprises, commerces, adresses. Crée-la sur console.cloud.google.com (Places API (New) à activer ; un crédit gratuit mensuel est offert).", 12f, false, "#9AA3B5"))
+        val gk = EditText(this)
+        gk.setText(prefs.str("googleKey", ""))
+        gk.hint = "Clé API Google Places"
+        gk.setHintTextColor(Color.parseColor("#6B7385"))
+        gk.setTextColor(Color.WHITE)
+        gk.setSingleLine(true)
+        cg.addView(gk)
+        cg.addView(button("Enregistrer", GREEN) {
+            prefs.setStr("googleKey", gk.text.toString().trim())
+            Geocoder.googleKey = gk.text.toString().trim()
+            toast("Clé enregistrée")
+        }, LinearLayout.LayoutParams(-1, -2).also { it.topMargin = dp(8) })
         val c = card(content)
         sectionTitle(c, "FAVORIS", GREEN)
         for ((key, icon, name) in listOf(Triple("home", "🏠", "Domicile"), Triple("work", "💼", "Travail"))) {
@@ -2712,7 +2728,6 @@ class MainActivity : Activity() {
         cl.addView(button("Enregistrer et tester", RED) {
             val k = lk.text.toString().trim()
             prefs.setStr("lufopKey", k)
-            creditView.visibility = if (k.isNotBlank()) View.VISIBLE else View.GONE
             lufopCenter = null
             lufopLastTry = 0L
             lufopLastError = ""
@@ -2794,7 +2809,7 @@ class MainActivity : Activity() {
     private fun aboutPage(content: LinearLayout) {
         val c = card(content)
         c.addView(label("DJSTEF GPS · v$VERSION", 18f, true))
-        c.addView(label("Carte : OpenStreetMap et OpenFreeMap\nItinéraires : Valhalla / OSRM (OpenStreetMap)\nRadars fixes : data.gouv.fr (Licence Ouverte 2.0)\nTrafic : TomTom\nCarburants : data.economie.gouv.fr (Licence Ouverte)\nRadars : Lufop.net et contributeurs OpenStreetMap (ODbL 1.0), lufop.net\nParkings : OpenStreetMap (ODbL)\nVoiture « Concept 3D » : Concept Car © Eric Chadwick / Khronos, CC BY 4.0, base Unity Fan (CC0)\nLimitations de vitesse : OpenStreetMap (Overpass)\nAdresses : Nominatim\nSatellite : Esri World Imagery\nHeure d'arrivée avec trafic : TomTom", 13f, false, "#C0C7D6"))
+        c.addView(label("Carte : OpenStreetMap et OpenFreeMap\nItinéraires : Valhalla / OSRM (OpenStreetMap)\nRadars fixes : data.gouv.fr (Licence Ouverte 2.0)\nTrafic : TomTom\nCarburants : data.economie.gouv.fr (Licence Ouverte)\nRadars : Lufop.net et contributeurs OpenStreetMap (ODbL 1.0), lufop.net\nParkings : OpenStreetMap (ODbL)\nVoiture « Concept 3D » : Concept Car © Eric Chadwick / Khronos, CC BY 4.0, base Unity Fan (CC0)\nLimitations de vitesse : OpenStreetMap (Overpass)\nAdresses : Nominatim\nSatellite : Esri World Imagery\nHeure d'arrivée avec trafic : TomTom\nRecherche : Photon (Komoot), Nominatim, Google Places (si clé)", 13f, false, "#C0C7D6"))
         val cb = card(content)
         sectionTitle(cb, "SAUVEGARDE DES RÉGLAGES", "#90A4AE")
         cb.addView(label("Copie tes réglages (clés API, voiture, favoris…) dans le presse-papiers, ou restaure-les après une réinstallation.", 12f, false, "#9AA3B5"))

@@ -116,7 +116,7 @@ object Http {
         }
     }
 
-    fun post(url: String, body: String, timeout: Int = 15000): String {
+    fun post(url: String, body: String, timeout: Int = 15000, headers: Map<String, String> = emptyMap()): String {
         val c = URL(url).openConnection() as HttpURLConnection
         c.connectTimeout = timeout
         c.readTimeout = timeout
@@ -124,6 +124,7 @@ object Http {
         c.doOutput = true
         c.setRequestProperty("User-Agent", UA)
         c.setRequestProperty("Content-Type", "application/json")
+        for ((k, v) in headers) c.setRequestProperty(k, v)
         try {
             c.outputStream.use { it.write(body.toByteArray()) }
             if (c.responseCode !in 200..299) throw IOException("HTTP ${c.responseCode}")
@@ -159,6 +160,8 @@ object Http {
 object Geocoder {
     /** Dernier diagnostic de recherche (affiché sous la liste de résultats). */
     @Volatile var diag: String = ""
+    /** Clé Google Places (facultative) : si elle est renseignée, les résultats Google passent en tête. */
+    @Volatile var googleKey: String = ""
     private val STOP = setOf("le", "la", "les", "l", "un", "une", "de", "du", "des", "d", "au", "aux", "et", "chez")
     private val TYPES = setOf(
         "camping", "campings", "restaurant", "hotel", "hôtel", "boulangerie", "pharmacie", "supermarche",
@@ -215,18 +218,27 @@ object Geocoder {
         val keysB = listOf("name", "street", "city", "postcode", "state")
 
         val lock = Any()
+        val topL = ArrayList<Place>()
         val nearL = ArrayList<Place>()
         val farL = ArrayList<Place>()
         var anyOk = false
-        fun dup(p: Place) = nearL.any { Geo.dist(it.pt, p.pt) < 120.0 } || farL.any { Geo.dist(it.pt, p.pt) < 120.0 }
+        fun dup(p: Place) = topL.any { Geo.dist(it.pt, p.pt) < 120.0 } || nearL.any { Geo.dist(it.pt, p.pt) < 120.0 } || farL.any { Geo.dist(it.pt, p.pt) < 120.0 }
         fun snapshot(): List<Place> {
             val n = if (near != null) nearL.sortedBy { Geo.dist(near, it.pt) } else nearL.toList()
-            return n + farL
+            return topL + n + farL
         }
         fun push(isNear: Boolean, list: List<Place>) {
             if (list.isEmpty()) return
             val snap = synchronized(lock) {
                 for (p in list) if (!dup(p)) (if (isNear) nearL else farL).add(p)
+                snapshot()
+            }
+            onPartial?.invoke(snap)
+        }
+        fun pushTop(list: List<Place>) {
+            if (list.isEmpty()) return
+            val snap = synchronized(lock) {
+                for (p in list) if (topL.none { Geo.dist(it.pt, p.pt) < 120.0 }) topL.add(p)
                 snapshot()
             }
             onPartial?.invoke(snap)
@@ -261,6 +273,31 @@ object Geocoder {
         coroutineScope {
             val jobs = ArrayList<kotlinx.coroutines.Deferred<Unit>>()
             val core = w0 ?: q
+            if (googleKey.isNotBlank()) {
+                jobs += async {
+                    try {
+                        val body = JSONObject().put("textQuery", q).put("languageCode", "fr").put("maxResultCount", 10)
+                        if (near != null) body.put("locationBias", JSONObject().put("circle", JSONObject()
+                            .put("center", JSONObject().put("latitude", near.lat).put("longitude", near.lon)).put("radius", 50000.0)))
+                        val r = JSONObject(Http.post("https://places.googleapis.com/v1/places:searchText", body.toString(), 8000, mapOf(
+                            "X-Goog-Api-Key" to googleKey,
+                            "X-Goog-FieldMask" to "places.displayName,places.formattedAddress,places.location"
+                        )))
+                        val arr = r.optJSONArray("places") ?: JSONArray()
+                        anyOk = true
+                        note("Google ${arr.length()}")
+                        pushTop((0 until arr.length()).mapNotNull {
+                            val o = arr.getJSONObject(it)
+                            val loc = o.optJSONObject("location") ?: return@mapNotNull null
+                            val nm = o.optJSONObject("displayName")?.optString("text").orEmpty()
+                            val ad = o.optString("formattedAddress")
+                            Place(listOf(nm, ad).filter { x -> x.isNotBlank() }.joinToString(", "), Pt(loc.getDouble("latitude"), loc.getDouble("longitude")))
+                        })
+                    } catch (e: Exception) {
+                        note("Google erreur ${e.message}")
+                    }
+                }
+            }
             if (near != null) {
                 // Zone proche (~45 km) puis zone large (~150 km), en parallèle
                 jobs += async { push(true, byName(core, near.lat, near.lon, 0.4)); if (w0 != null) push(true, byName(q, near.lat, near.lon, 0.4)) }
@@ -342,11 +379,12 @@ object Geocoder {
             }
             jobs.forEach { it.await() }
         }
+        val topF = synchronized(lock) { topL.toList() }
         val nearF = synchronized(lock) { nearL.toList() }
         val farF = synchronized(lock) { farL.toList() }
         diag += " · proches ${nearF.size}"
         val nearS = if (near != null) nearF.sortedBy { Geo.dist(near, it.pt) } else nearF
-        if (nearS.isEmpty() && farF.isEmpty() && !anyOk) throw IOException("recherche indisponible")
+        if (topF.isEmpty() && nearS.isEmpty() && farF.isEmpty() && !anyOk) throw IOException("recherche indisponible")
         var far = farF
         if (wh0 != null) {
             fun norm(t: String) = java.text.Normalizer.normalize(t.lowercase(), java.text.Normalizer.Form.NFD).replace(Regex("\\p{M}+"), "")
@@ -357,7 +395,7 @@ object Geocoder {
             val (close, other) = far.partition { Geo.dist(near, it.pt) < 60000.0 }
             far = close.sortedBy { Geo.dist(near, it.pt) } + other
         }
-        nearS + far
+        topF + nearS + far
     }
 }
 
