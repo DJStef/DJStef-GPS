@@ -275,6 +275,52 @@ object Geocoder {
         coroutineScope {
             val jobs = ArrayList<kotlinx.coroutines.Deferred<Unit>>()
             val core = w0 ?: q
+            // Annuaire officiel des entreprises (SIRENE) : trouve « GMTP », « Garage Martin »… avec leur adresse
+            jobs += async {
+                try {
+                    val arr = JSONObject(Http.get("https://recherche-entreprises.api.gouv.fr/search?per_page=25&q=" +
+                        URLEncoder.encode(core, "UTF-8"), 7000)).optJSONArray("results") ?: JSONArray()
+                    anyOk = true
+                    val list = ArrayList<Place>()
+                    for (i in 0 until arr.length()) {
+                        val r = arr.getJSONObject(i)
+                        val nm = r.optString("nom_complet")
+                        val ets = ArrayList<JSONObject>()
+                        r.optJSONObject("siege")?.let { ets.add(it) }
+                        val me = r.optJSONArray("matching_etablissements")
+                        if (me != null) for (k in 0 until me.length()) ets.add(me.getJSONObject(k))
+                        for (e in ets) {
+                            val la = e.optString("latitude").toDoubleOrNull() ?: continue
+                            val lo = e.optString("longitude").toDoubleOrNull() ?: continue
+                            val ad = e.optString("adresse").lowercase().split(" ").joinToString(" ") { w -> w.replaceFirstChar { c -> c.uppercase() } }
+                            list.add(Place("$nm, $ad", Pt(la, lo)))
+                        }
+                    }
+                    note("entreprises ${list.size}")
+                    if (near != null) {
+                        val sorted = list.sortedBy { Geo.dist(near, it.pt) }
+                        push(true, sorted.filter { Geo.dist(near, it.pt) < 150000.0 }.take(8))
+                        push(false, sorted.filter { Geo.dist(near, it.pt) >= 150000.0 }.take(3))
+                    } else push(false, list.take(8))
+                } catch (_: Exception) {
+                }
+            }
+            // Base Adresse Nationale (adresses de France, rapide et précise)
+            jobs += async {
+                try {
+                    var url = "https://api-adresse.data.gouv.fr/search/?limit=6&q=" + URLEncoder.encode(q, "UTF-8")
+                    if (near != null) url += "&lat=${near.lat}&lon=${near.lon}"
+                    val feats = JSONObject(Http.get(url, 7000)).optJSONArray("features") ?: JSONArray()
+                    anyOk = true
+                    push(false, (0 until feats.length()).mapNotNull {
+                        val f = feats.getJSONObject(it)
+                        val co = f.getJSONObject("geometry").getJSONArray("coordinates")
+                        val lb = f.optJSONObject("properties")?.optString("label").orEmpty()
+                        if (lb.isBlank()) null else Place(lb, Pt(co.getDouble(1), co.getDouble(0)))
+                    })
+                } catch (_: Exception) {
+                }
+            }
             if (googleKey.isNotBlank()) {
                 jobs += async {
                     try {
