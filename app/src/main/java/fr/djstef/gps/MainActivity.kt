@@ -76,7 +76,7 @@ import kotlin.math.roundToInt
 class MainActivity : Activity() {
 
     companion object {
-        const val VERSION = "0.32"
+        const val VERSION = "0.33"
         const val STYLE_URL = "https://tiles.openfreemap.org/styles/liberty"
         const val STYLE_DARK = "https://tiles.openfreemap.org/styles/dark"
 
@@ -120,6 +120,8 @@ class MainActivity : Activity() {
     private lateinit var navArrow: TextView
     private lateinit var navDist: TextView
     private lateinit var navStreet: TextView
+    private lateinit var navRoad: TextView
+    private lateinit var roadView: TextView
     private lateinit var radarBox: LinearLayout
     private lateinit var radarIcon: ImageView
     private lateinit var radarText: TextView
@@ -454,7 +456,14 @@ class MainActivity : Activity() {
         navStreet = label("", 14f, false, "#E8F5E9")
         navStreet.maxLines = 2
         navStreet.ellipsize = android.text.TextUtils.TruncateAt.END
-        navCol.addView(navDist)
+        navRoad = TextView(this)
+        navRoad.visibility = View.GONE
+        val distRow = LinearLayout(this)
+        distRow.orientation = LinearLayout.HORIZONTAL
+        distRow.gravity = Gravity.CENTER_VERTICAL
+        distRow.addView(navDist)
+        distRow.addView(navRoad, LinearLayout.LayoutParams(-2, -2).also { it.leftMargin = dp(10) })
+        navCol.addView(distRow)
         navCol.addView(navStreet)
         navBanner.addView(navCol, LinearLayout.LayoutParams(0, -2, 1f).also { it.leftMargin = dp(8) })
         topBox.addView(navBanner, LinearLayout.LayoutParams(-1, -2))
@@ -514,6 +523,9 @@ class MainActivity : Activity() {
         limitView.visibility = View.GONE
         limitView.alpha = 1f
         speedView.alpha = 1f
+        roadView = TextView(this)
+        roadView.visibility = View.GONE
+        infoRow.addView(roadView, LinearLayout.LayoutParams(-2, -2).also { it.bottomMargin = dp(6); it.rightMargin = dp(8) })
         infoRow.addView(limitView, LinearLayout.LayoutParams(dp(84), dp(84)).also { it.bottomMargin = dp(6) })
         infoRow.addView(speedView, LinearLayout.LayoutParams(dp(84), dp(84)))
         bottomBox.addView(infoRow, LinearLayout.LayoutParams(-1, -2).also { it.bottomMargin = dp(8) })
@@ -617,6 +629,29 @@ class MainActivity : Activity() {
 
         setContentView(root)
         updateModeButtons()
+    }
+
+    /** Pastille de numéro de route : A/E = autoroute (bleu), N = nationale (rouge), D = départementale (jaune). */
+    private fun styleRoad(tv: TextView, refs: List<String>, sizeSp: Float) {
+        val r = refs.firstOrNull()
+        if (r == null) { tv.visibility = View.GONE; return }
+        val (bg, fg) = when (r[0]) {
+            'A', 'E' -> Pair("#1565C0", "#FFFFFF")
+            'N' -> Pair("#C62828", "#FFFFFF")
+            'D' -> Pair("#F9A825", "#1A1A1A")
+            else -> Pair("#546E7A", "#FFFFFF")
+        }
+        tv.text = refs.take(2).joinToString(" · ")
+        tv.textSize = sizeSp
+        tv.typeface = Typeface.DEFAULT_BOLD
+        tv.setTextColor(Color.parseColor(fg))
+        tv.setPadding(dp(8), dp(2), dp(8), dp(2))
+        tv.background = GradientDrawable().also {
+            it.setColor(Color.parseColor(bg))
+            it.cornerRadius = dp(6).toFloat()
+            it.setStroke(dp(2), Color.WHITE)
+        }
+        tv.visibility = View.VISIBLE
     }
 
     private fun isLandscape() = resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
@@ -1747,6 +1782,7 @@ class MainActivity : Activity() {
         if (!navigating) return
         navigating = false
         zoomBoost = 0.0
+        roadView.visibility = View.GONE
         NavBridge.navigating = false
         NavBridge.route = null
         NavBridge.changed()
@@ -1805,6 +1841,8 @@ class MainActivity : Activity() {
         navArrow.text = arrowFor(next.kind)
         navDist.text = if (dNext >= 1000) String.format(Locale.FRANCE, "%.1f km", dNext / 1000) else "${(dNext / 10).roundToInt() * 10} m"
         navStreet.text = if (next.sign.isNotBlank()) next.sign + "\n" + next.text else next.text
+        styleRoad(navRoad, next.refs, 18f)
+        styleRoad(roadView, r.steps.getOrNull(stepIdx)?.refs ?: emptyList(), 16f)
         val nowMs = System.currentTimeMillis()
         if (nowMs - lastEtaFetch > 180000) dest?.let { fetchTrafficEta(p, it, false) }
         val te = trafficEta

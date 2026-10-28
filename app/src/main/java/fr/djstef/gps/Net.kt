@@ -29,7 +29,9 @@ data class Step(
     val name: String,
     val dist: Double,
     val at: Pt,
-    val sign: String = ""
+    val sign: String = "",
+    /** Numéros de route (A709, D64, N113, E80…) de la voie empruntée après la manœuvre. */
+    val refs: List<String> = emptyList()
 )
 
 /** Point intermédiaire : stop = étape avec arrêt, sinon simple point de passage (détour). */
@@ -500,7 +502,12 @@ object Router {
                 val name = if (names != null && names.length() > 0) names.getString(0) else ""
                 var text = m.optString("instruction").trim().trimEnd('.')
                 if (li < legs.length() - 1 && i == last) text = "Vous arrivez à l'étape"
-                steps.add(Step(text, m.optInt("type", 8), name, m.optDouble("length", 0.0) * 1000.0, pts[idx], signText(m)))
+                val refs = ArrayList<String>()
+                if (names != null) for (k in 0 until names.length()) {
+                    val n = names.optString(k).trim()
+                    if (Regex("^[A-Z]{1,2}\\s?\\d{1,4}[A-Za-z]?$").matches(n)) refs.add(n.replace(" ", ""))
+                }
+                steps.add(Step(text, m.optInt("type", 8), name, m.optDouble("length", 0.0) * 1000.0, pts[idx], signText(m), refs))
             }
         }
         val sum = trip.getJSONObject("summary")
