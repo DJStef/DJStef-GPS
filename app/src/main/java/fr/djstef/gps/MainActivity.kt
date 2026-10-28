@@ -76,7 +76,7 @@ import kotlin.math.roundToInt
 class MainActivity : Activity() {
 
     companion object {
-        const val VERSION = "0.55"
+        const val VERSION = "0.56"
         private val SIGN_REF_RE = Regex("^([A-Z]{1,2}\\s?\\d{1,4}[A-Za-z]?)\\s*[·:-]\\s*(.*)$")
         private val VERS_RE = Regex("\\s+vers\\s+(.+)$")
         private val TURN_KINDS = setOf(15, 19, 21, 24, 3, 16, 14, 10, 18, 20, 23, 2, 9, 11, 12, 13)
@@ -2072,6 +2072,7 @@ class MainActivity : Activity() {
 
     private fun showRoute(r: Route, radars: List<Radar>, info: String, keepNav: Boolean, fit: Boolean) {
         route = r
+        setupTraffic()
         if (navigating) NavBridge.route = r
         stepIdx = 0
         farSaid = -1
@@ -2207,6 +2208,7 @@ class MainActivity : Activity() {
     private fun clearRoute() {
         stopNavigation()
         route = null
+        setupTraffic()
         dest = null
         vias.clear()
         alts = emptyList()
@@ -2860,7 +2862,8 @@ class MainActivity : Activity() {
                     "route-casing"
                 )
             }
-            val vis = if (prefs.bool("traffic", false)) Property.VISIBLE else Property.NONE
+            // Avec un itinéraire, seul le trajet change de couleur : on masque le trafic sur toutes les autres routes
+            val vis = if (prefs.bool("traffic", false) && route == null) Property.VISIBLE else Property.NONE
             st.getLayerAs<RasterLayer>("traffic-layer")?.setProperties(PropertyFactory.visibility(vis))
         } catch (e: Exception) {
             toast("Trafic indisponible : ${e.message}")
