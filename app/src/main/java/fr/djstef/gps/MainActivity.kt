@@ -76,7 +76,7 @@ import kotlin.math.roundToInt
 class MainActivity : Activity() {
 
     companion object {
-        const val VERSION = "0.34"
+        const val VERSION = "0.35"
         const val STYLE_URL = "https://tiles.openfreemap.org/styles/liberty"
         const val STYLE_DARK = "https://tiles.openfreemap.org/styles/dark"
 
@@ -121,6 +121,7 @@ class MainActivity : Activity() {
     private lateinit var navDist: TextView
     private lateinit var navStreet: TextView
     private lateinit var navRoad: TextView
+    private lateinit var navToward: TextView
     private lateinit var roadView: TextView
     private lateinit var radarBox: LinearLayout
     private lateinit var radarIcon: ImageView
@@ -453,6 +454,10 @@ class MainActivity : Activity() {
         val navCol = LinearLayout(this)
         navCol.orientation = LinearLayout.VERTICAL
         navDist = label("", 24f, true)
+        navToward = label("", 18f, true)
+        navToward.maxLines = 2
+        navToward.ellipsize = android.text.TextUtils.TruncateAt.END
+        navToward.visibility = View.GONE
         navStreet = label("", 14f, false, "#E8F5E9")
         navStreet.maxLines = 2
         navStreet.ellipsize = android.text.TextUtils.TruncateAt.END
@@ -464,6 +469,7 @@ class MainActivity : Activity() {
         distRow.addView(navDist)
         distRow.addView(navRoad, LinearLayout.LayoutParams(-2, -2).also { it.leftMargin = dp(10) })
         navCol.addView(distRow)
+        navCol.addView(navToward)
         navCol.addView(navStreet)
         navBanner.addView(navCol, LinearLayout.LayoutParams(0, -2, 1f).also { it.leftMargin = dp(8) })
         topBox.addView(navBanner, LinearLayout.LayoutParams(-1, -2))
@@ -589,20 +595,31 @@ class MainActivity : Activity() {
         navBand.gravity = Gravity.CENTER_VERTICAL
         navBand.setBackgroundColor(Color.parseColor("#EE101828"))
         navBand.visibility = View.GONE
+        navBand.setBackgroundColor(Color.TRANSPARENT)
+        navBand.background = GradientDrawable().also {
+            it.setColor(Color.parseColor("#EE101828"))
+            it.cornerRadii = floatArrayOf(dp(22).toFloat(), dp(22).toFloat(), dp(22).toFloat(), dp(22).toFloat(), 0f, 0f, 0f, 0f)
+        }
+        // Gauche : bouton ✕ pour arrêter ; centre : durée, distance · arrivée, destination
+        val navStop = circleBtn("✕", 48) { stopNavigation() }
+        navStop.background = Gloss.oval(Color.parseColor(RED))
+        navBand.addView(navStop)
         val navInfoCol = LinearLayout(this)
         navInfoCol.orientation = LinearLayout.VERTICAL
-        navEta = label("", 26f, true)
-        navSub = label("", 14f, false, "#C0C7D6")
+        navInfoCol.gravity = Gravity.CENTER_HORIZONTAL
+        navEta = label("", 28f, true, "#81C784")
+        navEta.gravity = Gravity.CENTER
+        navSub = label("", 15f, false, "#E0E6F2")
+        navSub.gravity = Gravity.CENTER
         navDestV = label("", 12f, false, "#9AA3B5")
+        navDestV.gravity = Gravity.CENTER
         navDestV.maxLines = 1
         navDestV.ellipsize = android.text.TextUtils.TruncateAt.END
         navInfoCol.addView(navEta)
         navInfoCol.addView(navSub)
         navInfoCol.addView(navDestV)
-        navBand.addView(navInfoCol, LinearLayout.LayoutParams(0, -2, 1f).also { it.leftMargin = dp(8); it.rightMargin = dp(6) })
-        val navStop = button("Arrêter", RED) { stopNavigation() }
-        navStop.textSize = 14f
-        navBand.addView(navStop, LinearLayout.LayoutParams(dp(92), dp(48)))
+        navBand.addView(navInfoCol, LinearLayout.LayoutParams(0, -2, 1f).also { it.leftMargin = dp(8); it.rightMargin = dp(8) })
+        navBand.addView(View(this), LinearLayout.LayoutParams(dp(48), dp(48)))
         bottomBox.addView(navBand, LinearLayout.LayoutParams(-1, -2))
         bottomBox.addView(creditView, LinearLayout.LayoutParams(-1, -2).also { it.topMargin = dp(4) })
 
@@ -1147,6 +1164,7 @@ class MainActivity : Activity() {
 
     // --- Suivi fluide : la caméra est déplacée à chaque image (≈60 fois/s) vers la position estimée ---
     private var smRunning = false
+    private var snapIdx = 0
     private var smInit = false
     private var fixLat = 0.0
     private var fixLon = 0.0
@@ -1220,6 +1238,19 @@ class MainActivity : Activity() {
             fixLon = loc.longitude
             fixSpeed = if (loc.hasSpeed() && loc.speed > 1.0f) loc.speed.toDouble() else 0.0
             fixBear = if (loc.hasBearing() && loc.speed > 1.5f) loc.bearing else lastBearing
+            // Accrochage à l'itinéraire : la voiture et la caméra restent centrées sur le trait bleu
+            route?.let { r ->
+                val gp = Pt(loc.latitude, loc.longitude)
+                var sn = Geo.snap(gp, r.pts, snapIdx - 30, snapIdx + 400)
+                if (sn == null || sn.third > 40.0) sn = Geo.snap(gp, r.pts, 0, r.pts.size - 1)
+                if (sn != null && sn.third <= 40.0) {
+                    fixLat = sn.first.lat
+                    fixLon = sn.first.lon
+                    fixBear = sn.second.toFloat()
+                    if (!prefs.bool("northUp", false)) tBear = sn.second
+                    snapIdx = Geo.lastSnapIdx
+                }
+            }
             fixAt = android.os.SystemClock.elapsedRealtime()
             val cp = m.cameraPosition
             val far = smInit && Geo.dist(Pt(dLat, dLon), Pt(loc.latitude, loc.longitude)) > 250.0
@@ -1840,17 +1871,24 @@ class MainActivity : Activity() {
         val remTime = if (r.dist > 0) r.dur * remain / r.dist else 0.0
         navArrow.text = arrowFor(next.kind)
         navDist.text = if (dNext >= 1000) String.format(Locale.FRANCE, "%.1f km", dNext / 1000) else "${(dNext / 10).roundToInt() * 10} m"
-        navStreet.text = if (next.sign.isNotBlank()) next.sign + "\n" + next.text else next.text
+        val vm = Regex("\\s+vers\\s+(.+)$").find(next.text)
+        val toward = if (next.sign.isNotBlank()) next.sign else vm?.groupValues?.get(1)?.replace("/", " · ")?.let { "vers $it" } ?: ""
+        val instr = if (next.sign.isBlank() && vm != null) next.text.removeRange(vm.range) else next.text
+        navToward.text = toward
+        navToward.visibility = if (toward.isBlank()) View.GONE else View.VISIBLE
+        navStreet.text = instr
         styleRoad(navRoad, next.refs, 18f)
-        styleRoad(roadView, r.steps.getOrNull(stepIdx)?.refs ?: emptyList(), 16f)
+        roadView.visibility = View.GONE
         val nowMs = System.currentTimeMillis()
         if (nowMs - lastEtaFetch > 180000) dest?.let { fetchTrafficEta(p, it, false) }
         val te = trafficEta
         val shown = if (te != null && nowMs - te.second < 360000) te.first else remTime
         etaView.text = "Arrivée ${eta(shown)}"
         subView.text = summary(shown, remain) + (if (te != null && trafficDelay >= 120) " · trafic +${(trafficDelay / 60).roundToInt()} min" else "")
-        navEta.text = etaView.text.toString().removePrefix("Arrivée ")
-        navSub.text = subView.text
+        val bandMin = (shown / 60).roundToInt()
+        navEta.text = if (bandMin >= 60) "${bandMin / 60} h ${bandMin % 60} min" else "$bandMin min"
+        val bandDist = if (remain >= 1000) String.format(Locale.FRANCE, "%.1f km", remain / 1000) else "${remain.roundToInt()} m"
+        navSub.text = "$bandDist · ${eta(shown)}" + (if (te != null && trafficDelay >= 120) " · trafic +${(trafficDelay / 60).roundToInt()} min" else "")
         // Zoom d'approche : rond-point (dès 300 m) et virages (dès 150 m), puis retour au zoom choisi
         val roundabout = next.kind == 26 || next.kind == 27
         val turn = next.kind in setOf(15, 19, 21, 24, 3, 16, 14, 10, 18, 20, 23, 2, 9, 11, 12, 13)

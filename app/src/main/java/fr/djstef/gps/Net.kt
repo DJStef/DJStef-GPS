@@ -89,6 +89,43 @@ object Geo {
         return sqrt(cx * cx + cy * cy)
     }
 
+    @Volatile var lastSnapIdx = 0
+
+    /** Point de l'itinéraire le plus proche de p, avec le cap de la route à cet endroit (cap pris ~20 m devant). */
+    fun snap(p: Pt, pts: List<Pt>, from: Int, to: Int): Triple<Pt, Double, Double>? {
+        if (pts.size < 2) return null
+        val k = cos(Math.toRadians(p.lat))
+        var best = Double.MAX_VALUE
+        var bi = -1
+        var bt = 0.0
+        val lo = from.coerceIn(0, pts.size - 2)
+        val hi = to.coerceIn(lo + 1, pts.size - 1)
+        for (i in lo until hi) {
+            val a = pts[i]
+            val b = pts[i + 1]
+            val ax = (a.lon - p.lon) * k * 111320.0
+            val ay = (a.lat - p.lat) * 110540.0
+            val dx = (b.lon - p.lon) * k * 111320.0 - ax
+            val dy = (b.lat - p.lat) * 110540.0 - ay
+            val len2 = dx * dx + dy * dy
+            val t = if (len2 == 0.0) 0.0 else ((-ax * dx - ay * dy) / len2).coerceIn(0.0, 1.0)
+            val cx = ax + t * dx
+            val cy = ay + t * dy
+            val d = sqrt(cx * cx + cy * cy)
+            if (d < best) { best = d; bi = i; bt = t }
+        }
+        if (bi < 0) return null
+        lastSnapIdx = bi
+        val a = pts[bi]
+        val b = pts[bi + 1]
+        val sp = Pt(a.lat + (b.lat - a.lat) * bt, a.lon + (b.lon - a.lon) * bt)
+        var j = bi + 1
+        var ahead = pts[j]
+        while (j < pts.size - 1 && dist(sp, ahead) < 20.0) { j++; ahead = pts[j] }
+        val br = if (dist(sp, ahead) < 1.0) bearing(a, b) else bearing(sp, ahead)
+        return Triple(sp, br, best)
+    }
+
     fun distToRoute(p: Pt, pts: List<Pt>): Double {
         var best = Double.MAX_VALUE
         for (i in 0 until pts.size - 1) {
