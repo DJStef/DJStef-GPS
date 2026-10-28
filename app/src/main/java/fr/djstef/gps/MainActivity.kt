@@ -76,7 +76,7 @@ import kotlin.math.roundToInt
 class MainActivity : Activity() {
 
     companion object {
-        const val VERSION = "0.44"
+        const val VERSION = "0.45"
         const val STYLE_URL = "https://tiles.openfreemap.org/styles/liberty"
         const val STYLE_DARK = "https://tiles.openfreemap.org/styles/dark"
 
@@ -124,6 +124,7 @@ class MainActivity : Activity() {
     private lateinit var navStreet: TextView
     private lateinit var navRoad: TextView
     private lateinit var navToward: TextView
+    private lateinit var navArr: TextView
     private lateinit var roadView: TextView
     private lateinit var radarBox: LinearLayout
     private lateinit var radarIcon: ImageView
@@ -630,17 +631,26 @@ class MainActivity : Activity() {
         navInfoCol.gravity = Gravity.CENTER_HORIZONTAL
         navEta = label("", 28f, true, "#81C784")
         navEta.gravity = Gravity.CENTER
-        navSub = label("", 15f, false, "#E0E6F2")
-        navSub.gravity = Gravity.CENTER
-        navDestV = label("", 12f, false, "#9AA3B5")
+        navSub = label("", 19f, true, "#E0E6F2")
+        navSub.gravity = Gravity.START
+        navArr = label("", 19f, true, "#E0E6F2")
+        navArr.gravity = Gravity.END
+        val kmRow = LinearLayout(this)
+        kmRow.orientation = LinearLayout.HORIZONTAL
+        kmRow.addView(navSub, LinearLayout.LayoutParams(0, -2, 1f))
+        kmRow.addView(navArr, LinearLayout.LayoutParams(0, -2, 1f))
+        navDestV = label("", 16f, false, "#B8C2D6")
         navDestV.gravity = Gravity.CENTER
         navDestV.maxLines = 1
         navDestV.ellipsize = android.text.TextUtils.TruncateAt.END
         navInfoCol.addView(navEta)
-        navInfoCol.addView(navSub)
+        navInfoCol.addView(kmRow, LinearLayout.LayoutParams(-1, -2))
         navInfoCol.addView(navDestV)
         navBand.addView(navInfoCol, LinearLayout.LayoutParams(0, -2, 1f).also { it.leftMargin = dp(8); it.rightMargin = dp(8) })
-        navBand.addView(View(this), LinearLayout.LayoutParams(dp(48), dp(48)))
+        val altBtn = circleBtn("⇄", 48) { alternativesDialog() }
+        altBtn.elevation = 0f
+        altBtn.textSize = 22f
+        navBand.addView(altBtn)
         bottomBox.addView(navBand, LinearLayout.LayoutParams(-1, -2))
         bottomBox.addView(creditView, LinearLayout.LayoutParams(-1, -2).also { it.topMargin = dp(4) })
 
@@ -1805,6 +1815,42 @@ class MainActivity : Activity() {
         }
     }
 
+    /** Pendant le guidage : propose d'autres itinéraires depuis la position actuelle. */
+    private fun alternativesDialog() {
+        val l = me
+        val d = dest
+        if (!navigating || l == null || d == null) { toast("Disponible pendant le guidage"); return }
+        toast("Recherche d'autres itinéraires…")
+        scope.launch {
+            try {
+                val from = Pt(l.latitude, l.longitude)
+                val viaList = vias.map { Via(it.pt, true) }
+                val list = Router.routes(mode, from, d, routeOpts(), emptyList(), viaList, 2)
+                if (list.size < 2) { toast("Pas d'autre itinéraire proposé"); return@launch }
+                val items = list.mapIndexed { i, r ->
+                    "${if (i == 0) "Recommandé" else "Alternative $i"} · ${(r.dur / 60).roundToInt()} min · ${String.format(Locale.FRANCE, "%.1f", r.dist / 1000)} km"
+                }.toTypedArray()
+                AlertDialog.Builder(this@MainActivity)
+                    .setTitle("Choisir l'itinéraire")
+                    .setItems(items) { _, i ->
+                        val r = list[i]
+                        scope.launch {
+                            val radars = radarsOnRoute(r.pts)
+                            alts = list
+                            altIdx = i
+                            showRoute(r, radars, "", true, false)
+                            snapIdx = 0
+                            toast("Itinéraire modifié")
+                        }
+                    }
+                    .setNegativeButton("Annuler", null)
+                    .show()
+            } catch (e: Exception) {
+                toast("Itinéraires indisponibles : ${e.message}")
+            }
+        }
+    }
+
     private fun refreshAlts() {
         altRow.removeAllViews()
         if (alts.size < 2 || navigating) {
@@ -1894,7 +1940,7 @@ class MainActivity : Activity() {
         9 -> "↗"
         11 -> "↘"
         12, 13 -> "↩"
-        26, 27 -> "↻"
+        26, 27 -> "↺" // circulation à droite : les ronds-points se parcourent dans le sens inverse des aiguilles d'une montre
         4, 5, 6 -> "🏁"
         else -> "↑"
     }
@@ -2013,7 +2059,9 @@ class MainActivity : Activity() {
         val bandMin = (shown / 60).roundToInt()
         navEta.text = if (bandMin >= 60) "${bandMin / 60} h ${bandMin % 60} min" else "$bandMin min"
         val bandDist = if (remain >= 1000) String.format(Locale.FRANCE, "%.1f km", remain / 1000) else "${remain.roundToInt()} m"
-        navSub.text = "$bandDist · ${eta(shown)}" + (if (te != null && trafficDelay >= 120) " · trafic +${(trafficDelay / 60).roundToInt()} min" else "")
+        navSub.text = bandDist
+        navArr.text = eta(shown)
+        navDestV.text = destName.substringBefore(",") + (if (te != null && trafficDelay >= 120) " · trafic +${(trafficDelay / 60).roundToInt()} min" else "")
         // Zoom d'approche : rond-point (dès 300 m) et virages (dès 150 m), puis retour au zoom choisi
         val roundabout = next.kind == 26 || next.kind == 27
         val turn = next.kind in setOf(15, 19, 21, 24, 3, 16, 14, 10, 18, 20, 23, 2, 9, 11, 12, 13)
