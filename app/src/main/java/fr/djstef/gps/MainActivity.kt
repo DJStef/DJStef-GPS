@@ -76,7 +76,7 @@ import kotlin.math.roundToInt
 class MainActivity : Activity() {
 
     companion object {
-        const val VERSION = "0.49"
+        const val VERSION = "0.50"
         const val STYLE_URL = "https://tiles.openfreemap.org/styles/liberty"
         const val STYLE_DARK = "https://tiles.openfreemap.org/styles/dark"
 
@@ -119,7 +119,7 @@ class MainActivity : Activity() {
         sideBox?.visibility = v
     }
     private lateinit var navBanner: LinearLayout
-    private lateinit var navArrow: TextView
+    private lateinit var navArrow: ManeuverView
     private lateinit var navDist: TextView
     private lateinit var navStreet: TextView
     private lateinit var navRoad: TextView
@@ -452,9 +452,8 @@ class MainActivity : Activity() {
         navBanner.setPadding(dp(12), dp(8), dp(12), dp(8))
         navBanner.background.alpha = 222
         navBanner.visibility = View.GONE
-        navArrow = label("↑", 36f, true)
-        navArrow.gravity = Gravity.CENTER
-        navBanner.addView(navArrow, LinearLayout.LayoutParams(dp(52), -2))
+        navArrow = ManeuverView(this)
+        navBanner.addView(navArrow, LinearLayout.LayoutParams(dp(68), dp(68)))
         val navCol = LinearLayout(this)
         navCol.orientation = LinearLayout.VERTICAL
         navDist = label("", 24f, true)
@@ -1989,7 +1988,7 @@ class MainActivity : Activity() {
         setResults(false)
         applyNavPadding()
         val first = r.steps.firstOrNull()
-        navArrow.text = arrowFor(first?.kind ?: 1)
+        navArrow.set(first?.kind ?: 1, first?.text ?: "")
         navDist.text = ""
         navStreet.text = first?.text ?: "Suivez l'itinéraire"
         speak(first?.text ?: "C'est parti")
@@ -2058,7 +2057,7 @@ class MainActivity : Activity() {
         var remain = dNext
         for (j in stepIdx + 1 until r.steps.size) remain += r.steps[j].dist
         val remTime = if (r.dist > 0) r.dur * remain / r.dist else 0.0
-        navArrow.text = arrowFor(next.kind)
+        navArrow.set(next.kind, next.text)
         navDist.text = if (dNext >= 1000) String.format(Locale.FRANCE, "%.1f km", dNext / 1000) else "${(dNext / 10).roundToInt() * 10} m"
         val vm = Regex("\\s+vers\\s+(.+)$").find(next.text)
         val toward = if (next.sign.isNotBlank()) next.sign else vm?.groupValues?.get(1)?.replace("/", " · ")?.let { "vers $it" } ?: ""

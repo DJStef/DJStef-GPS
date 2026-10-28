@@ -209,3 +209,108 @@ class SpeedBubble(ctx: Context) : View(ctx) {
         p.shader = null
     }
 }
+
+/** Pictogramme de manœuvre dessiné (virage, rond-point avec sortie, bifurcation, demi-tour, arrivée…), lisible d'un coup d'œil. */
+class ManeuverView(ctx: Context) : View(ctx) {
+    private var kind = 8
+    private var exitNo = 0
+    private val p = Paint(Paint.ANTI_ALIAS_FLAG)
+
+    fun set(k: Int, text: String) {
+        kind = k
+        exitNo = Regex("(\\d+)\\s*(?:er|re|ère|ème|e|è)?\\s*sortie", RegexOption.IGNORE_CASE).find(text)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+        invalidate()
+    }
+
+    private fun head(c: Canvas, tx: Float, ty: Float, deg: Double) {
+        val r = Math.toRadians(deg)
+        val dx = Math.cos(r).toFloat()
+        val dy = Math.sin(r).toFloat()
+        val bx = tx - dx * 22f
+        val by = ty - dy * 22f
+        val px = -dy
+        val py = dx
+        val path = Path()
+        path.moveTo(tx, ty)
+        path.lineTo(bx + px * 15f, by + py * 15f)
+        path.lineTo(bx - px * 15f, by - py * 15f)
+        path.close()
+        p.style = Paint.Style.FILL
+        c.drawPath(path, p)
+        p.style = Paint.Style.STROKE
+    }
+
+    override fun onDraw(c: Canvas) {
+        val sz = min(width, height).toFloat()
+        if (sz <= 0f) return
+        c.save()
+        c.translate((width - sz) / 2f, (height - sz) / 2f)
+        c.scale(sz / 100f, sz / 100f)
+        p.color = Color.WHITE
+        p.style = Paint.Style.STROKE
+        p.strokeWidth = 11f
+        p.strokeCap = Paint.Cap.ROUND
+        p.strokeJoin = Paint.Join.ROUND
+        val m = when (kind) {
+            10, 2, 15, 3, 9, 16, 11, 14, 18, 20, 23, 19, 21, 24, 12, 13 -> if (kind in intArrayOf(15, 3, 16, 14, 19, 21, 24, 13)) -1 else 1
+            else -> 1
+        }
+        fun px(x: Float) = if (m > 0) x else 100f - x
+        fun md(d: Double) = if (m > 0) d else 180.0 - d
+        val path = Path()
+        when (kind) {
+            10, 2, 15, 3 -> { // virage à droite / à gauche
+                path.moveTo(px(36f), 92f); path.lineTo(px(36f), 56f); path.quadTo(px(36f), 40f, px(52f), 40f); path.lineTo(px(62f), 40f)
+                c.drawPath(path, p); head(c, px(82f), 40f, md(0.0))
+            }
+            9, 16 -> { // légèrement
+                path.moveTo(px(40f), 92f); path.lineTo(px(40f), 64f); path.lineTo(px(58f), 46f)
+                c.drawPath(path, p); head(c, px(74f), 30f, md(-45.0))
+            }
+            11, 14 -> { // fortement
+                path.moveTo(px(34f), 92f); path.lineTo(px(34f), 44f); path.lineTo(px(55f), 59f)
+                c.drawPath(path, p); head(c, px(72f), 70f, md(34.0))
+            }
+            12, 13 -> { // demi-tour
+                path.moveTo(px(66f), 92f); path.lineTo(px(66f), 44f); path.cubicTo(px(66f), 20f, px(34f), 20f, px(34f), 44f); path.lineTo(px(34f), 56f)
+                c.drawPath(path, p); head(c, px(34f), 78f, 90.0)
+            }
+            18, 20, 23, 19, 21, 24 -> { // sortie / bifurcation : la voie à prendre en blanc, l'autre atténuée
+                p.alpha = 90
+                val straight = Path(); straight.moveTo(50f, 56f); straight.lineTo(50f, 30f)
+                c.drawPath(straight, p); head(c, 50f, 14f, -90.0)
+                p.alpha = 255
+                path.moveTo(50f, 92f); path.lineTo(50f, 56f); path.lineTo(px(52f), 52f); path.lineTo(px(66f), 40f)
+                c.drawPath(path, p); head(c, px(80f), 26f, md(-45.0))
+            }
+            26, 27 -> { // rond-point : sortie à prendre mise en évidence (circulation à droite = sens inverse des aiguilles)
+                val n = if (exitNo in 1..8) exitNo else 2
+                val cx = 50f; val cy = 40f; val rr = 19f
+                p.alpha = 110; p.strokeWidth = 8f
+                c.drawCircle(cx, cy, rr, p)
+                p.alpha = 255; p.strokeWidth = 11f
+                path.moveTo(50f, 94f); path.lineTo(50f, cy + rr)
+                c.drawPath(path, p)
+                val sweep = -(90f * n).coerceAtMost(330f)
+                c.drawArc(RectF(cx - rr, cy - rr, cx + rr, cy + rr), 90f, sweep, false, p)
+                val deg = 90.0 - 90.0 * n
+                val r = Math.toRadians(deg)
+                val dx = Math.cos(r).toFloat(); val dy = Math.sin(r).toFloat()
+                val ex = Path(); ex.moveTo(cx + dx * rr, cy + dy * rr); ex.lineTo(cx + dx * 33f, cy + dy * 33f)
+                c.drawPath(ex, p); head(c, cx + dx * 51f, cy + dy * 51f, deg)
+            }
+            4, 5, 6 -> { // arrivée : drapeau
+                p.strokeWidth = 9f
+                c.drawLine(36f, 90f, 36f, 14f, p)
+                p.style = Paint.Style.FILL
+                val f = Path(); f.moveTo(36f, 14f); f.lineTo(82f, 28f); f.lineTo(36f, 46f); f.close()
+                c.drawPath(f, p)
+            }
+            else -> { // tout droit
+                path.moveTo(50f, 92f); path.lineTo(50f, 38f)
+                c.drawPath(path, p); head(c, 50f, 16f, -90.0)
+            }
+        }
+        c.restore()
+    }
+}
