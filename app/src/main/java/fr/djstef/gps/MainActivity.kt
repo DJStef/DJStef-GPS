@@ -76,7 +76,7 @@ import kotlin.math.roundToInt
 class MainActivity : Activity() {
 
     companion object {
-        const val VERSION = "0.46"
+        const val VERSION = "0.47"
         const val STYLE_URL = "https://tiles.openfreemap.org/styles/liberty"
         const val STYLE_DARK = "https://tiles.openfreemap.org/styles/dark"
 
@@ -639,13 +639,26 @@ class MainActivity : Activity() {
         kmRow.orientation = LinearLayout.HORIZONTAL
         kmRow.gravity = Gravity.CENTER_VERTICAL
         // Une seule ligne : km à gauche · temps restant au centre · heure d'arrivée à droite
-        kmRow.addView(navSub, LinearLayout.LayoutParams(0, -2, 1f))
-        kmRow.addView(navEta, LinearLayout.LayoutParams(-2, -2))
-        kmRow.addView(navArr, LinearLayout.LayoutParams(0, -2, 1f))
+        // Tout doit rester visible : une seule ligne par texte, taille qui s'adapte à la place disponible
+        fun fit(tv: TextView, minSp: Int, maxSp: Int, lines: Int) {
+            tv.maxLines = lines
+            tv.setHorizontallyScrolling(false)
+            tv.setAutoSizeTextTypeUniformWithConfiguration(minSp, maxSp, 1, android.util.TypedValue.COMPLEX_UNIT_SP)
+        }
+        fit(navSub, 11, 19, 1)
+        fit(navEta, 16, 28, 1)
+        fit(navArr, 11, 19, 1)
+        navSub.gravity = Gravity.CENTER_VERTICAL or Gravity.START
+        navEta.gravity = Gravity.CENTER
+        navArr.gravity = Gravity.CENTER_VERTICAL or Gravity.END
+        kmRow.addView(navSub, LinearLayout.LayoutParams(0, dp(36), 1f))
+        kmRow.addView(navEta, LinearLayout.LayoutParams(0, dp(40), 1.5f))
+        kmRow.addView(navArr, LinearLayout.LayoutParams(0, dp(36), 1f))
         navDestV = label("", 16f, false, "#B8C2D6")
         navDestV.gravity = Gravity.CENTER
-        navDestV.maxLines = 1
+        navDestV.maxLines = 2
         navDestV.ellipsize = android.text.TextUtils.TruncateAt.END
+        navDestV.setAutoSizeTextTypeUniformWithConfiguration(11, 16, 1, android.util.TypedValue.COMPLEX_UNIT_SP)
         navInfoCol.addView(kmRow, LinearLayout.LayoutParams(-1, -2))
         navInfoCol.addView(navDestV)
         navBand.addView(navInfoCol, LinearLayout.LayoutParams(0, -2, 1f).also { it.leftMargin = dp(8); it.rightMargin = dp(8) })
