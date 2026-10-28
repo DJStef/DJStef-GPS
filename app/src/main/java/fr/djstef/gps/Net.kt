@@ -2,6 +2,9 @@ package fr.djstef.gps
 
 import android.content.Context
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -166,29 +169,39 @@ object Geocoder {
         if (it in "àâäáéèêëíìîïóòôöúùûüçœæ") '.' else it
     }.joinToString("")
 
-    /** Recherche d'adresses et de lieux (« camping les peupliers à colombier », commerces…). */
-    suspend fun search(q0: String, near: Pt? = null): List<Place> = withContext(Dispatchers.IO) {
+    private fun placeOf(f: JSONObject, keys: List<String>): Place? {
+        val pr = f.optJSONObject("properties") ?: return null
+        val co = f.optJSONObject("geometry")?.optJSONArray("coordinates") ?: return null
+        val parts = ArrayList<String>()
+        for (k in keys) {
+            val v = pr.optString(k, "")
+            if (v.isNotBlank() && v !in parts) parts.add(v)
+        }
+        if (parts.isEmpty()) return null
+        return Place(parts.joinToString(", "), Pt(co.getDouble(1), co.getDouble(0)))
+    }
+
+    /**
+     * Recherche d'adresses et de lieux. Toutes les sources sont interrogées en parallèle (délai court) ;
+     * [onPartial] reçoit la liste à chaque nouveau résultat, les lieux proches de toi en tête.
+     */
+    suspend fun search(q0: String, near: Pt? = null, onPartial: ((List<Place>) -> Unit)? = null): List<Place> = withContext(Dispatchers.IO) {
         val q = q0.trim()
         diag = if (near == null) "position inconnue" else "position ${"%.3f".format(near.lat)},${"%.3f".format(near.lon)}"
-        val out = ArrayList<Place>()
-        fun add(pl: Place) {
-            if (out.none { Geo.dist(it.pt, pl.pt) < 120.0 }) out.add(pl)
-        }
-        // « nom à ville » → nom + ville
         val m = Regex("^(.{3,}?)(?:\\s+(?:à|a|au|aux|près de|pres de|sur|dans|en)\\s+|\\s*,\\s*|\\s+-\\s+)(.{3,})$", RegexOption.IGNORE_CASE).find(q)
         val ws = q.split(Regex("\\s+"))
-        // Sans séparateur : « camping les peupliers colombier » → dernier mot = ville si le premier est un type de lieu
         val implicit = m == null && ws.size >= 3 && ws[0].lowercase() in TYPES
         var what = if (implicit) ws.dropLast(1).joinToString(" ") else m?.groupValues?.get(1)?.trim()
         var where = if (implicit) ws.last() else m?.groupValues?.get(2)?.trim()
         if (implicit) {
-            // Le dernier mot n'est une ville que si Nominatim le reconnaît comme localité (sinon : « les peupliers »)
             val isCity = try {
                 JSONArray(Http.get("https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&countrycodes=fr&featuretype=settlement&q=" +
-                    URLEncoder.encode(where!!, "UTF-8"))).length() > 0
+                    URLEncoder.encode(where!!, "UTF-8"), 6000)).length() > 0
             } catch (_: Exception) { false }
             if (!isCity) { what = null; where = null }
         }
+        val w0 = what
+        val wh0 = where
 
         fun nameWords(t: String): String = t.lowercase().split(Regex("[\\s'’-]+"))
             .filter { it.length > 1 && it !in STOP && it !in TYPES }.joinToString(" ")
@@ -198,10 +211,31 @@ object Geocoder {
             "pharmacie" to "amenity:pharmacy", "bar" to "amenity:bar", "cafe" to "amenity:cafe", "café" to "amenity:cafe",
             "gite" to "tourism:guest_house", "gîte" to "tourism:guest_house", "mairie" to "amenity:townhall"
         )
-        /** Photon limité à une zone (bbox) : trouve les lieux de ce nom près de (lat, lon). */
-        fun byName(full: String, lat: Double, lon: Double, dLat: Double, town: String): List<Place> {
-            val words = nameWords(full)
-            if (words.isBlank()) return emptyList()
+        val keysA = listOf("name", "street", "city", "postcode")
+        val keysB = listOf("name", "street", "city", "postcode", "state")
+
+        val lock = Any()
+        val nearL = ArrayList<Place>()
+        val farL = ArrayList<Place>()
+        var anyOk = false
+        fun dup(p: Place) = nearL.any { Geo.dist(it.pt, p.pt) < 120.0 } || farL.any { Geo.dist(it.pt, p.pt) < 120.0 }
+        fun snapshot(): List<Place> {
+            val n = if (near != null) nearL.sortedBy { Geo.dist(near, it.pt) } else nearL.toList()
+            return n + farL
+        }
+        fun push(isNear: Boolean, list: List<Place>) {
+            if (list.isEmpty()) return
+            val snap = synchronized(lock) {
+                for (p in list) if (!dup(p)) (if (isNear) nearL else farL).add(p)
+                snapshot()
+            }
+            onPartial?.invoke(snap)
+        }
+        fun note(t: String) { synchronized(lock) { diag += " · $t" } }
+
+        /** Photon limité à une zone (bbox) autour de (lat, lon). */
+        fun byName(full: String, lat: Double, lon: Double, dLat: Double): List<Place> {
+            val words = nameWords(full).ifBlank { full.lowercase() }
             val dLon = dLat / Math.cos(Math.toRadians(lat)).coerceAtLeast(0.2)
             val bbox = "${lon - dLon},${lat - dLat},${lon + dLon},${lat + dLat}"
             val tag = osmTag[full.trim().split(Regex("\\s+")).first().lowercase()]
@@ -210,114 +244,101 @@ object Geocoder {
                 try {
                     var url = "https://photon.komoot.io/api/?limit=12&lang=fr&bbox=$bbox&q=" + URLEncoder.encode(words, "UTF-8")
                     if (t != null) url += "&osm_tag=$t"
-                    val feats = JSONObject(Http.get(url)).optJSONArray("features") ?: JSONArray()
-                    diag += " · zone ${feats.length()} rés."
+                    val feats = JSONObject(Http.get(url, 7000)).optJSONArray("features") ?: JSONArray()
+                    anyOk = true
                     for (k in 0 until feats.length()) {
                         val f = feats.getJSONObject(k)
                         val pr = f.optJSONObject("properties") ?: continue
                         if (t == null && pr.optString("osm_key") in setOf("highway", "landuse", "place")) continue
-                        val co = f.getJSONObject("geometry").getJSONArray("coordinates")
-                        val parts = ArrayList<String>()
-                        for (key in listOf("name", "street", "city", "postcode")) {
-                            val v = pr.optString(key, "")
-                            if (v.isNotBlank() && v !in parts) parts.add(v)
-                        }
-                        if (parts.isNotEmpty()) res.add(Place(parts.joinToString(", "), Pt(co.getDouble(1), co.getDouble(0))))
+                        placeOf(f, keysA)?.let { res.add(it) }
                     }
-                } catch (e: Exception) {
-                    diag += " · zone erreur ${e.message}"
+                } catch (_: Exception) {
                 }
             }
             return res
         }
-        val named = ArrayList<Place>()
-        // Résultats proches de toi (zone d'environ 40 km), toujours placés en tête, du plus proche au plus lointain
-        val zone = ArrayList<Place>()
-        if (near != null) {
-            val found = byName(what ?: q, near.lat, near.lon, 0.4, "") + (if (what != null) byName(q, near.lat, near.lon, 0.4, "") else emptyList())
-            for (p in found.sortedBy { Geo.dist(near, it.pt) }) if (zone.none { Geo.dist(it.pt, p.pt) < 120.0 }) zone.add(p)
-        }
-        diag += " · proches ${zone.size}" + (if (what != null) " · ville «$where»" else "")
-        fun finish(list: List<Place>): List<Place> = zone + list.filter { r -> zone.none { Geo.dist(it.pt, r.pt) < 120.0 } }
-        if (what != null && where != null) {
-            try {
-                val cities = JSONArray(Http.get(
-                    "https://nominatim.openstreetmap.org/search?format=jsonv2&limit=4&countrycodes=fr&accept-language=fr&q=" +
-                        URLEncoder.encode(where, "UTF-8")))
-                for (i in 0 until cities.length()) {
-                    val c = cities.getJSONObject(i)
-                    val lat = c.getString("lat").toDouble()
-                    val lon = c.getString("lon").toDouble()
-                    val cname = c.optString("name", where)
-                    val dep = c.optString("display_name").split(",").map { it.trim() }.let { l -> if (l.size >= 3) l[l.size - 3] else "" }
-                    val tag = if (dep.isNotBlank() && dep != cname) "$cname ($dep)" else cname
-                    named.addAll(byName(what, lat, lon, 0.12, tag))
-                    // Photon biaisé sur la ville candidate
+
+        coroutineScope {
+            val jobs = ArrayList<kotlinx.coroutines.Deferred<Unit>>()
+            val core = w0 ?: q
+            if (near != null) {
+                // Zone proche (~45 km) puis zone large (~150 km), en parallèle
+                jobs += async { push(true, byName(core, near.lat, near.lon, 0.4)); if (w0 != null) push(true, byName(q, near.lat, near.lon, 0.4)) }
+                jobs += async { push(true, byName(core, near.lat, near.lon, 1.4)) }
+                // Nominatim limité à la zone large (trouve aussi les noms courts / sigles)
+                jobs += async {
                     try {
-                        val feats = JSONObject(Http.get("https://photon.komoot.io/api/?limit=4&lang=fr&lat=$lat&lon=$lon&q=" +
-                            URLEncoder.encode(what, "UTF-8"))).optJSONArray("features") ?: JSONArray()
-                        for (k in 0 until feats.length()) {
-                            val f = feats.getJSONObject(k)
-                            val pr = f.optJSONObject("properties") ?: continue
-                            val co = f.getJSONObject("geometry").getJSONArray("coordinates")
-                            val pt = Pt(co.getDouble(1), co.getDouble(0))
-                            if (Geo.dist(pt, Pt(lat, lon)) > 25000.0) continue
-                            val parts = ArrayList<String>()
-                            for (key in listOf("name", "street", "city", "postcode")) {
-                                val v = pr.optString(key, "")
-                                if (v.isNotBlank() && v !in parts) parts.add(v)
-                            }
-                            if (parts.isNotEmpty()) named.add(Place(parts.joinToString(", "), pt))
+                        val d = 1.4
+                        val dl = d / Math.cos(Math.toRadians(near.lat)).coerceAtLeast(0.2)
+                        val vb = "${near.lon - dl},${near.lat + d},${near.lon + dl},${near.lat - d}"
+                        val arr = JSONArray(Http.get("https://nominatim.openstreetmap.org/search?format=jsonv2&limit=10&accept-language=fr&bounded=1&viewbox=$vb&q=" +
+                            URLEncoder.encode(core, "UTF-8"), 7000))
+                        anyOk = true
+                        push(true, (0 until arr.length()).map { arr.getJSONObject(it) }.map {
+                            Place(it.getString("display_name"), Pt(it.getString("lat").toDouble(), it.getString("lon").toDouble()))
+                        })
+                    } catch (_: Exception) {
+                    }
+                }
+            }
+            // Photon partout, biaisé vers ta position
+            jobs += async {
+                try {
+                    var url = "https://photon.komoot.io/api/?limit=8&lang=fr&q=" + URLEncoder.encode(q, "UTF-8")
+                    if (near != null) url += "&lat=${near.lat}&lon=${near.lon}"
+                    val feats = JSONObject(Http.get(url, 7000)).optJSONArray("features") ?: JSONArray()
+                    anyOk = true
+                    push(false, (0 until feats.length()).mapNotNull { placeOf(feats.getJSONObject(it), keysB) })
+                } catch (_: Exception) {
+                }
+            }
+            // Nominatim partout (léger délai : 1 requête/seconde demandée par le service)
+            jobs += async {
+                try {
+                    delay(1100)
+                    val arr = JSONArray(Http.get("https://nominatim.openstreetmap.org/search?format=jsonv2&limit=6&accept-language=fr&q=" +
+                        URLEncoder.encode(q, "UTF-8"), 7000))
+                    anyOk = true
+                    push(false, (0 until arr.length()).map { arr.getJSONObject(it) }.map {
+                        Place(it.getString("display_name"), Pt(it.getString("lat").toDouble(), it.getString("lon").toDouble()))
+                    })
+                } catch (_: Exception) {
+                }
+            }
+            // « nom à ville » : lieux de ce nom autour de la ville demandée
+            if (w0 != null && wh0 != null) {
+                jobs += async {
+                    try {
+                        val cities = JSONArray(Http.get("https://nominatim.openstreetmap.org/search?format=jsonv2&limit=3&countrycodes=fr&accept-language=fr&q=" +
+                            URLEncoder.encode(wh0, "UTF-8"), 7000))
+                        for (i in 0 until cities.length()) {
+                            val c = cities.getJSONObject(i)
+                            val lat = c.getString("lat").toDouble()
+                            val lon = c.getString("lon").toDouble()
+                            push(false, byName(w0, lat, lon, 0.12))
                         }
                     } catch (_: Exception) {
                     }
                 }
-            } catch (_: Exception) {
             }
+            jobs.forEach { it.await() }
         }
-        for (p in named) add(p)
-
-        try {
-            var url = "https://photon.komoot.io/api/?limit=8&lang=fr&q=" + URLEncoder.encode(q, "UTF-8")
-            if (near != null) url += "&lat=${near.lat}&lon=${near.lon}"
-            val feats = JSONObject(Http.get(url)).optJSONArray("features") ?: JSONArray()
-            for (i in 0 until feats.length()) {
-                val f = feats.getJSONObject(i)
-                val pr = f.optJSONObject("properties") ?: continue
-                val c = f.getJSONObject("geometry").getJSONArray("coordinates")
-                val parts = ArrayList<String>()
-                for (k in listOf("name", "street", "city", "postcode", "state")) {
-                    val v = pr.optString(k, "")
-                    if (v.isNotBlank() && v !in parts) parts.add(v)
-                }
-                if (parts.isEmpty()) continue
-                add(Place(parts.joinToString(", "), Pt(c.getDouble(1), c.getDouble(0))))
-            }
-        } catch (_: Exception) {
-        }
-        try {
-            val url = "https://nominatim.openstreetmap.org/search?format=jsonv2&limit=6&accept-language=fr&q=" +
-                URLEncoder.encode(q, "UTF-8")
-            val arr = JSONArray(Http.get(url))
-            for (i in 0 until arr.length()) {
-                val o = arr.getJSONObject(i)
-                add(Place(o.getString("display_name"), Pt(o.getString("lat").toDouble(), o.getString("lon").toDouble())))
-            }
-        } catch (_: Exception) {
-            if (out.isEmpty() && zone.isEmpty()) throw java.io.IOException("recherche indisponible")
-        }
-        // Les résultats qui mentionnent la ville demandée passent en premier
-        if (where != null) {
+        val nearF = synchronized(lock) { nearL.toList() }
+        val farF = synchronized(lock) { farL.toList() }
+        diag += " · proches ${nearF.size}"
+        val nearS = if (near != null) nearF.sortedBy { Geo.dist(near, it.pt) } else nearF
+        if (nearS.isEmpty() && farF.isEmpty() && !anyOk) throw IOException("recherche indisponible")
+        var far = farF
+        if (wh0 != null) {
             fun norm(t: String) = java.text.Normalizer.normalize(t.lowercase(), java.text.Normalizer.Form.NFD).replace(Regex("\\p{M}+"), "")
-            val w = norm(where)
-            val (hit, rest) = out.partition { norm(it.name).contains(w) }
-            return@withContext finish(hit + rest)
+            val w = norm(wh0)
+            val (hit, rest) = far.partition { norm(it.name).contains(w) }
+            far = hit + rest
+        } else if (near != null && ws.size >= 2 && ws[0].lowercase() in TYPES) {
+            val (close, other) = far.partition { Geo.dist(near, it.pt) < 60000.0 }
+            far = close.sortedBy { Geo.dist(near, it.pt) } + other
         }
-        if (where == null && near != null && ws.size >= 2 && ws[0].lowercase() in TYPES) {
-            val (close, far) = out.partition { Geo.dist(near, it.pt) < 60000.0 }
-            return@withContext finish(close.sortedBy { Geo.dist(near, it.pt) } + far)
-        }
-        finish(out)
+        nearS + far
     }
 }
 

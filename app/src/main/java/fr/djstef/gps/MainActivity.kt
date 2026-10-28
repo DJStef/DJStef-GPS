@@ -76,7 +76,7 @@ import kotlin.math.roundToInt
 class MainActivity : Activity() {
 
     companion object {
-        const val VERSION = "0.29"
+        const val VERSION = "0.30"
         const val STYLE_URL = "https://tiles.openfreemap.org/styles/liberty"
         const val STYLE_DARK = "https://tiles.openfreemap.org/styles/dark"
 
@@ -1350,25 +1350,32 @@ class MainActivity : Activity() {
         hideKeyboard()
         scope.launch {
             try {
-                val res = Geocoder.search(q, me?.let { Pt(it.latitude, it.longitude) })
-                resultsBox.removeAllViews()
-                if (res.isEmpty()) addRow("Aucun résultat", {})
-                for (p in res) {
-                    addRow(p.name, {
-                        val short = p.name.substringBefore(",")
-                        val place = Place(short, p.pt)
-                        val fav = pendingFav
-                        if (fav != null) {
-                            prefs.setFav(fav, place)
-                            pendingFav = null
-                            toast("Adresse enregistrée")
-                        }
-                        prefs.addRecent(place)
-                        goTo(place)
-                    })
+                fun render(res: List<Place>, final: Boolean) {
+                    resultsBox.removeAllViews()
+                    if (res.isEmpty() && final) addRow("Aucun résultat", {})
+                    for (p in res) {
+                        addRow(p.name, {
+                            val short = p.name.substringBefore(",")
+                            val place = Place(short, p.pt)
+                            val fav = pendingFav
+                            if (fav != null) {
+                                prefs.setFav(fav, place)
+                                pendingFav = null
+                                toast("Adresse enregistrée")
+                            }
+                            prefs.addRecent(place)
+                            goTo(place)
+                        })
+                    }
+                    if (!final) addRow("… recherche en cours", {})
+                    else if (Geocoder.diag.isNotBlank()) addRow("ℹ v$VERSION · " + Geocoder.diag, {})
+                    setResults(true)
                 }
-                if (Geocoder.diag.isNotBlank()) addRow("ℹ v$VERSION · " + Geocoder.diag, {})
-                setResults(true)
+                render(emptyList(), false)
+                val res = Geocoder.search(q, me?.let { Pt(it.latitude, it.longitude) }) { part ->
+                    scope.launch { render(part, false) }
+                }
+                render(res, true)
             } catch (e: Exception) {
                 toast("Recherche impossible : ${e.message}")
             }
