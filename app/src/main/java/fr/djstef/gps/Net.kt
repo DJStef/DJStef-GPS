@@ -728,6 +728,9 @@ object Router {
 // ---------- Limitations de vitesse (OpenStreetMap, tag maxspeed, via Overpass) ----------
 
 object SpeedLimits {
+    /** Nom de la route sous la dernière position interrogée (Valhalla /locate). */
+    @Volatile var lastNames: String = ""
+
     private val ENDPOINTS = listOf(
         "https://overpass-api.de/api/interpreter",
         "https://overpass.kumi.systems/api/interpreter"
@@ -751,6 +754,8 @@ object SpeedLimits {
             if (score < bestScore) { bestScore = score; best = e }
         }
         val e = best ?: return null
+        val nm = e.optJSONObject("edge_info")?.optJSONArray("names")
+        lastNames = if (nm != null) (0 until nm.length()).map { nm.optString(it) }.filter { it.isNotBlank() }.take(2).joinToString(" · ") else ""
         val sl = e.optJSONObject("edge_info")?.optInt("speed_limit", 0) ?: 0
         if (sl in 5..150) return sl
         return when (e.optJSONObject("edge")?.optJSONObject("classification")?.optString("classification")) {

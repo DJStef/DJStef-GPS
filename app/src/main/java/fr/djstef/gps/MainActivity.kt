@@ -76,7 +76,7 @@ import kotlin.math.roundToInt
 class MainActivity : Activity() {
 
     companion object {
-        const val VERSION = "0.57"
+        const val VERSION = "0.58"
         private val SIGN_REF_RE = Regex("^([A-Z]{1,2}\\s?\\d{1,4}[A-Za-z]?)\\s*[·:-]\\s*(.*)$")
         private val VERS_RE = Regex("\\s+vers\\s+(.+)$")
         private val TURN_KINDS = setOf(15, 19, 21, 24, 3, 16, 14, 10, 18, 20, 23, 2, 9, 11, 12, 13)
@@ -164,6 +164,8 @@ class MainActivity : Activity() {
     private var follow = true
     private var zoomBoost = 0.0
     private lateinit var carView: ImageView
+    private lateinit var carName: TextView
+    private var carNameW = 0
     private var carTopBmp: android.graphics.Bitmap? = null
     private var carRearBmp: android.graphics.Bitmap? = null
     private lateinit var infoRow: LinearLayout
@@ -395,6 +397,17 @@ class MainActivity : Activity() {
         carView.scaleType = ImageView.ScaleType.FIT_XY
         carView.visibility = View.INVISIBLE
         root.addView(carView, FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.START))
+        carName = TextView(this)
+        carName.setTextColor(Color.WHITE)
+        carName.textSize = 14f
+        carName.setTypeface(null, Typeface.BOLD)
+        carName.maxLines = 1
+        carName.ellipsize = android.text.TextUtils.TruncateAt.END
+        carName.maxWidth = (resources.displayMetrics.widthPixels * 0.7).toInt()
+        carName.setPadding(dp(10), dp(3), dp(10), dp(3))
+        carName.background = colorBg("#CC101828", 12)
+        carName.visibility = View.GONE
+        root.addView(carName, FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.START))
         mapView.getMapAsync { m ->
             map = m
             m.cameraPosition = CameraPosition.Builder().target(LatLng(46.6, 2.5)).zoom(5.0).build()
@@ -1371,6 +1384,15 @@ class MainActivity : Activity() {
         carView.translationX = x - px
         carView.translationY = y - py
         carView.visibility = View.VISIBLE
+        if (carName.visibility == View.VISIBLE) {
+            if (carNameW == 0) {
+                carName.measure(View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED), View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED))
+                carNameW = carName.measuredWidth
+            }
+            val carBottom = if (is3d) y else y + h * scale / 2f
+            carName.translationX = x - carNameW / 2f
+            carName.translationY = carBottom + dp(4)
+        }
     }
 
     private fun applyCarMode() {
@@ -1745,11 +1767,30 @@ class MainActivity : Activity() {
             try {
                 limitNow = SpeedLimits.at(p, heading)
                 refreshLimitView()
+                updateRoadName()
             } catch (e: Exception) {
             } finally {
                 limitBusy = false
             }
         }
+    }
+
+    /** Nom de la route sous la voiture : étape de l'itinéraire en guidage, sinon route sous la position. */
+    private fun updateRoadName() {
+        if (!::carName.isInitialized) return
+        var n = ""
+        val r = route
+        if (navigating && r != null) {
+            val st = r.steps.getOrNull(stepIdx)
+            if (st != null) n = if (st.refs.isNotEmpty() && st.name.isNotBlank()) st.refs.first() + " · " + st.name else if (st.name.isNotBlank()) st.name else st.refs.joinToString(" · ")
+        }
+        if (n.isBlank()) n = SpeedLimits.lastNames
+        if (n != carName.text.toString()) {
+            carName.text = n
+            carNameW = 0
+        }
+        carName.visibility = if (n.isBlank() || !prefs.bool("showRoadName", true)) View.GONE else View.VISIBLE
+        if (carName.visibility == View.VISIBLE) positionCar()
     }
 
     private fun refreshLimitView() {
@@ -2329,6 +2370,7 @@ class MainActivity : Activity() {
             nearSaid = -1
             if (r.steps[stepIdx].kind in 4..6 && vias.isNotEmpty()) vias.removeAt(0)
         }
+        updateRoadName()
         val next = r.steps.getOrNull(stepIdx + 1) ?: return
         val dNext = Geo.dist(p, next.at)
 
