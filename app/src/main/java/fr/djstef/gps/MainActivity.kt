@@ -76,7 +76,7 @@ import kotlin.math.roundToInt
 class MainActivity : Activity() {
 
     companion object {
-        const val VERSION = "0.59"
+        const val VERSION = "0.60"
         private val SIGN_REF_RE = Regex("^([A-Z]{1,2}\\s?\\d{1,4}[A-Za-z]?)\\s*[·:-]\\s*(.*)$")
         private val VERS_RE = Regex("\\s+vers\\s+(.+)$")
         private val TURN_KINDS = setOf(15, 19, 21, 24, 3, 16, 14, 10, 18, 20, 23, 2, 9, 11, 12, 13)
@@ -399,15 +399,16 @@ class MainActivity : Activity() {
         root.addView(carView, FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.START))
         carName = TextView(this)
         carName.setTextColor(Color.WHITE)
-        carName.textSize = 14f
+        carName.textSize = 16f
+        carName.elevation = dp(4).toFloat()
         carName.setTypeface(null, Typeface.BOLD)
         carName.maxLines = 1
         carName.ellipsize = android.text.TextUtils.TruncateAt.END
         carName.maxWidth = (resources.displayMetrics.widthPixels * 0.7).toInt()
-        carName.setPadding(dp(10), dp(3), dp(10), dp(3))
-        carName.background = colorBg("#CC101828", 12)
+        carName.setPadding(dp(16), dp(6), dp(16), dp(6))
+        carName.background = colorBg("#26324F", 16)
         carName.visibility = View.GONE
-        root.addView(carName, FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.START))
+        root.addView(carName, FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL))
         mapView.getMapAsync { m ->
             map = m
             m.cameraPosition = CameraPosition.Builder().target(LatLng(46.6, 2.5)).zoom(5.0).build()
@@ -703,6 +704,7 @@ class MainActivity : Activity() {
             placeSide()
             applyMapMargins()
             applyNavPadding()
+            placeRoadName()
         }
 
         root.setOnApplyWindowInsetsListener { _, ins ->
@@ -1057,13 +1059,17 @@ class MainActivity : Activity() {
         }
     }
 
+    /** Appui sur la limite : la voiture et la caméra reviennent à la position GPS réelle (sur la route). */
     private fun resetGps() {
-        try { locMgr.removeUpdates(locListener) } catch (_: Exception) {}
-        me = null
-        snapIdx = 0
+        val l = me
+        if (l == null) { toast("Pas encore de position GPS"); return }
+        follow = true
         smInit = false
-        toast("Position GPS réinitialisée")
-        startLocation()
+        snapIdx = 0
+        moveCamera(l, true)
+        if (navigating) smStart()
+        positionCar()
+        toast("Voiture recentrée")
     }
 
     private fun widenRoads(st: Style) {
@@ -1384,15 +1390,7 @@ class MainActivity : Activity() {
         carView.translationX = x - px
         carView.translationY = y - py
         carView.visibility = View.VISIBLE
-        if (carName.visibility == View.VISIBLE) {
-            if (carNameW == 0) {
-                carName.measure(View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED), View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED))
-                carNameW = carName.measuredWidth
-            }
-            val carBottom = if (is3d) y else y + h * scale / 2f
-            carName.translationX = x - carNameW / 2f
-            carName.translationY = carBottom + dp(4)
-        }
+    }
     }
 
     private fun applyCarMode() {
@@ -1775,22 +1773,55 @@ class MainActivity : Activity() {
         }
     }
 
-    /** Nom de la route sous la voiture : étape de l'itinéraire en guidage, sinon route sous la position. */
+    private val REF_ONLY = Regex("^[A-Z]{1,2}\\s?\\d{1,4}[A-Za-z]?$")
+
+    /** Pastille fixe au-dessus du bandeau du bas : numéro + nom de la route, couleur selon le type de route. */
     private fun updateRoadName() {
         if (!::carName.isInitialized) return
-        var n = ""
+        val refs = ArrayList<String>()
+        var name = ""
         val r = route
         if (navigating && r != null) {
             val st = r.steps.getOrNull(stepIdx)
-            if (st != null) n = if (st.refs.isNotEmpty() && st.name.isNotBlank()) st.refs.first() + " · " + st.name else if (st.name.isNotBlank()) st.name else st.refs.joinToString(" · ")
+            if (st != null) { refs.addAll(st.refs); name = st.name }
         }
-        if (n.isBlank()) n = SpeedLimits.lastNames
-        if (n != carName.text.toString()) {
-            carName.text = n
-            carNameW = 0
+        if (refs.isEmpty() && name.isBlank()) {
+            for (p in SpeedLimits.lastNames.split(" · ").map { it.trim() }.filter { it.isNotEmpty() }) {
+                if (REF_ONLY.matches(p)) refs.add(p) else if (name.isEmpty()) name = p
+            }
         }
-        carName.visibility = if (n.isBlank() || !prefs.bool("showRoadName", true)) View.GONE else View.VISIBLE
-        if (carName.visibility == View.VISIBLE) positionCar()
+        fun norm(x: String) = x.replace(" ", "").uppercase()
+        val ref = refs.firstOrNull()?.let { it.replace(Regex("^([A-Z]+)(\\d)"), "$1 $2") } ?: ""
+        if (name.isNotBlank() && ref.isNotBlank() && norm(name) == norm(ref)) name = ""
+        val txt = listOf(ref, name).filter { it.isNotBlank() }.joinToString(" · ")
+        val show = txt.isNotBlank() && prefs.bool("showRoadName", true)
+        if (txt != carName.text.toString()) {
+            carName.text = txt
+            val (bg, fg) = when (ref.firstOrNull()) {
+                'A', 'E' -> Pair("#1565C0", "#FFFFFF")
+                'N' -> Pair("#C62828", "#FFFFFF")
+                'D' -> Pair("#F9A825", "#1A1A1A")
+                else -> Pair("#26324F", "#FFFFFF")
+            }
+            carName.setTextColor(Color.parseColor(fg))
+            carName.background = colorBg(bg, 16)
+        }
+        carName.visibility = if (show) View.VISIBLE else View.GONE
+        placeRoadName()
+    }
+
+    private fun placeRoadName() {
+        if (!::carName.isInitialized || !::bottomBox.isInitialized) return
+        val lp = carName.layoutParams as FrameLayout.LayoutParams
+        val bl = bottomBox.layoutParams as FrameLayout.LayoutParams
+        val land = isLandscape()
+        lp.gravity = if (land) Gravity.BOTTOM or Gravity.START else Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
+        lp.leftMargin = if (land) leftInset + dp(10) else 0
+        val nb = bottomBox.height + bl.bottomMargin + dp(8)
+        if (lp.bottomMargin != nb) {
+            lp.bottomMargin = nb
+        }
+        carName.layoutParams = lp
     }
 
     private fun refreshLimitView() {
