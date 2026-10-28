@@ -76,7 +76,7 @@ import kotlin.math.roundToInt
 class MainActivity : Activity() {
 
     companion object {
-        const val VERSION = "0.53"
+        const val VERSION = "0.54"
         private val VERS_RE = Regex("\\s+vers\\s+(.+)$")
         private val TURN_KINDS = setOf(15, 19, 21, 24, 3, 16, 14, 10, 18, 20, 23, 2, 9, 11, 12, 13)
         private val CONDENSED: Typeface = Typeface.create("sans-serif-condensed", Typeface.BOLD)
@@ -749,7 +749,7 @@ class MainActivity : Activity() {
             else -> Pair("#546E7A", "#FFFFFF")
         }
         tv.text = refs.take(2).joinToString(" · ")
-        tv.textSize = sizeSp
+        tv.textSize = sizeSp * uiF
         tv.typeface = Typeface.DEFAULT_BOLD
         tv.setTextColor(Color.parseColor(fg))
         tv.setPadding(dp(8), dp(2), dp(8), dp(2))
@@ -793,6 +793,89 @@ class MainActivity : Activity() {
         applyBottomMargins()
     }
 
+    // ---------- Adaptation à la taille de la fenêtre (écran partagé, fenêtre réduite) ----------
+
+    private class Sc {
+        var ow = 0; var oh = 0; var lw = 0; var lh = 0
+        val om = IntArray(4); val lm = IntArray(4)
+        val op = IntArray(4); val lpd = IntArray(4)
+        var ots = 0f; var lts = 0f
+        var omin = 0; var omax = 0; var lmin = 0; var lmax = 0
+        var init = false
+    }
+
+    private var uiF = 1f
+
+    private fun windowScale(): Float {
+        val c = resources.configuration
+        val h = c.screenHeightDp
+        if (h <= 0) return 1f
+        val base = if (isLandscape()) 400f else 800f
+        return (h / base).coerceIn(0.55f, 1f)
+    }
+
+    private fun scaleView(v: View, f: Float, skip: View?, deep: Boolean) {
+        if (v === skip) return
+        val key = 0x7f0a0001
+        var st = v.getTag(key) as? Sc
+        if (st == null) { st = Sc(); v.setTag(key, st) }
+        val lp = v.layoutParams
+        if (lp != null) {
+            if (lp.width > 0) {
+                if (!st.init || lp.width != st.lw) st.ow = lp.width
+                st.lw = (st.ow * f).roundToInt().coerceAtLeast(1); lp.width = st.lw
+            }
+            if (lp.height > 0) {
+                if (!st.init || lp.height != st.lh) st.oh = lp.height
+                st.lh = (st.oh * f).roundToInt().coerceAtLeast(1); lp.height = st.lh
+            }
+            if (lp is ViewGroup.MarginLayoutParams) {
+                val cur = intArrayOf(lp.leftMargin, lp.topMargin, lp.rightMargin, lp.bottomMargin)
+                for (i in 0..3) {
+                    if (!st.init || cur[i] != st.lm[i]) st.om[i] = cur[i]
+                    st.lm[i] = (st.om[i] * f).roundToInt()
+                }
+                lp.setMargins(st.lm[0], st.lm[1], st.lm[2], st.lm[3])
+            }
+        }
+        val pc = intArrayOf(v.paddingLeft, v.paddingTop, v.paddingRight, v.paddingBottom)
+        for (i in 0..3) {
+            if (!st.init || pc[i] != st.lpd[i]) st.op[i] = pc[i]
+            st.lpd[i] = (st.op[i] * f).roundToInt()
+        }
+        v.setPadding(st.lpd[0], st.lpd[1], st.lpd[2], st.lpd[3])
+        if (v is TextView) {
+            if (v.autoSizeTextType == TextView.AUTO_SIZE_TEXT_TYPE_UNIFORM) {
+                val mn = v.autoSizeMinTextSize
+                val mx = v.autoSizeMaxTextSize
+                if (!st.init || mn != st.lmin || mx != st.lmax) { st.omin = mn; st.omax = mx }
+                st.lmin = (st.omin * f).roundToInt().coerceAtLeast(6)
+                st.lmax = (st.omax * f).roundToInt().coerceAtLeast(st.lmin + 1)
+                v.setAutoSizeTextTypeUniformWithConfiguration(st.lmin, st.lmax, 1, android.util.TypedValue.COMPLEX_UNIT_PX)
+                v.requestLayout()
+            } else {
+                val cur = v.textSize
+                if (!st.init || kotlin.math.abs(cur - st.lts) > 0.5f) st.ots = cur
+                v.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, st.ots * f)
+                st.lts = v.textSize
+            }
+        }
+        st.init = true
+        v.layoutParams = lp
+        if (deep && v is ViewGroup) for (i in 0 until v.childCount) scaleView(v.getChildAt(i), f, skip, true)
+    }
+
+    private fun applyUiScale() {
+        if (!::navBanner.isInitialized || !::navBand.isInitialized || !::radarBox.isInitialized || !::infoRow.isInitialized) return
+        val f = windowScale()
+        uiF = f
+        scaleView(navBanner, f, navRoad, true)
+        scaleView(radarBox, f, null, true)
+        scaleView(infoRow, f, null, true)
+        scaleView(navBand, f, null, true)
+        for (b in sideBtns) scaleView(b, f, null, false)
+    }
+
     /** En guidage, le bandeau d'infos occupe toute la largeur de la colonne en bas, fond quasi opaque. */
     private fun applyBottomMargins() {
         if (!::bottomBox.isInitialized || !::navBand.isInitialized) return
@@ -814,6 +897,7 @@ class MainActivity : Activity() {
             (creditView.layoutParams as LinearLayout.LayoutParams).topMargin = dp(4)
         }
         bottomBox.layoutParams = lp
+        applyUiScale()
         applyMapBottom()
     }
 
