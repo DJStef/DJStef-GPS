@@ -77,7 +77,7 @@ import kotlin.math.roundToInt
 class MainActivity : Activity() {
 
     companion object {
-        const val VERSION = "1.3"
+        const val VERSION = "1.4"
         private val EURO_RE = Regex("^E\\s?\\d{1,3}$")
         private val SIGN_REF_RE = Regex("^([A-Z]{1,2}\\s?\\d{1,4}[A-Za-z]?)\\s*[·:-]\\s*(.*)$")
         private val VERS_RE = Regex("\\s+vers\\s+(.+)$")
@@ -720,30 +720,24 @@ class MainActivity : Activity() {
 
         panel = LinearLayout(this)
         panel.orientation = LinearLayout.VERTICAL
-        panel.background = colorBg("#F2101828", 22)
-        panel.setPadding(dp(16), dp(14), dp(16), dp(14))
+        panel.background = colorBg("#F2101828", 20)
+        panel.setPadding(dp(12), dp(10), dp(12), dp(10))
         panel.visibility = View.GONE
-        etaView = label("", 22f, true)
-        subView = label("", 15f, false, "#C0C7D6")
-        destView = label("", 14f, false, "#9AA3B5")
-        destView.maxLines = 2
+        fun compact(b: TextView, sp: Float) { b.textSize = sp; b.setPadding(dp(4), dp(9), dp(4), dp(9)) }
+        etaView = label("", 17f, true)
+        etaView.maxLines = 1
+        etaView.setAutoSizeTextTypeUniformWithConfiguration(12, 17, 1, android.util.TypedValue.COMPLEX_UNIT_SP)
+        subView = label("", 12f, false, "#C0C7D6")
+        subView.maxLines = 1
+        destView = label("", 12f, false, "#9AA3B5")
+        destView.visibility = View.GONE
         panel.addView(etaView)
         panel.addView(subView)
         panel.addView(destView)
         altRow = LinearLayout(this)
         altRow.orientation = LinearLayout.HORIZONTAL
         altRow.visibility = View.GONE
-        panel.addView(altRow, LinearLayout.LayoutParams(-1, -2).also { it.topMargin = dp(8) })
-
-        modeRow = LinearLayout(this)
-        modeRow.orientation = LinearLayout.HORIZONTAL
-        for ((key, name) in listOf("car" to "🚗 Voiture", "bike" to "🚲 Vélo", "foot" to "🚶 Marche")) {
-            val b = button(name, GREY) { setMode(key) }
-            b.textSize = 14f
-            modeBtns[key] = b
-            modeRow.addView(b, LinearLayout.LayoutParams(0, -2, 1f).also { it.rightMargin = dp(6) })
-        }
-        panel.addView(modeRow, LinearLayout.LayoutParams(-1, -2).also { it.topMargin = dp(10) })
+        panel.addView(altRow, LinearLayout.LayoutParams(-1, -2).also { it.topMargin = dp(6) })
 
         val actions = LinearLayout(this)
         actions.orientation = LinearLayout.HORIZONTAL
@@ -756,32 +750,41 @@ class MainActivity : Activity() {
                 computeRoute(false)
             } else startNavigation()
         }
+        demoBtn = button("▶ Démo", BLUE) { startDemo() }
         cancelBtn = button("Annuler", RED) { clearRoute() }
-        actions.addView(startBtn, LinearLayout.LayoutParams(0, -2, 2f).also { it.rightMargin = dp(6) })
+        compact(startBtn, 15f)
+        compact(demoBtn, 14f)
+        compact(cancelBtn, 14f)
+        actions.addView(startBtn, LinearLayout.LayoutParams(0, -2, 1.3f).also { it.rightMargin = dp(6) })
+        actions.addView(demoBtn, LinearLayout.LayoutParams(0, -2, 1f).also { it.rightMargin = dp(6) })
         actions.addView(cancelBtn, LinearLayout.LayoutParams(0, -2, 1f))
-        panel.addView(actions, LinearLayout.LayoutParams(-1, -2).also { it.topMargin = dp(10) })
-        demoBtn = button("▶ Démo : simuler le trajet", BLUE) { startDemo() }
-        demoBtn.textSize = 14f
-        panel.addView(demoBtn, LinearLayout.LayoutParams(-1, -2).also { it.topMargin = dp(8) })
-        fromBtn = button("📍 Départ : ma position", GREY) { pickStart() }
-        fromBtn.textSize = 14f
-        fromBtn.maxLines = 1
+        panel.addView(actions, LinearLayout.LayoutParams(-1, -2).also { it.topMargin = dp(8) })
+
+        // Une seule ligne : mode de transport · départ · étape · favori · partage
+        modeRow = LinearLayout(this)
+        modeRow.orientation = LinearLayout.HORIZONTAL
+        for ((key, name) in listOf("car" to "🚗", "bike" to "🚲", "foot" to "🚶")) {
+            val b = button(name, GREY) { setMode(key) }
+            compact(b, 16f)
+            modeBtns[key] = b
+            modeRow.addView(b, LinearLayout.LayoutParams(0, -2, 1f).also { it.rightMargin = dp(4) })
+        }
+        fromBtn = button("📍 Ma position", GREY) { pickStart() }
+        compact(fromBtn, 12f)
         fromBtn.ellipsize = android.text.TextUtils.TruncateAt.END
         fromBtn.setOnLongClickListener { customStart = null; toast("Départ : ta position"); computeRoute(false); true }
-        panel.addView(fromBtn, LinearLayout.LayoutParams(-1, -2).also { it.topMargin = dp(8) })
-        val tools = LinearLayout(this)
-        tools.orientation = LinearLayout.HORIZONTAL
-        viaBtn = button("＋ Étape", GREY) { addViaStart() }
-        viaBtn.textSize = 13f
+        modeRow.addView(fromBtn, LinearLayout.LayoutParams(0, -2, 2.6f).also { it.rightMargin = dp(4) })
+        viaBtn = button("＋", GREY) { addViaStart() }
+        compact(viaBtn, 16f)
         viaBtn.setOnLongClickListener { vias.clear(); toast("Étapes retirées"); computeRoute(navigating); true }
-        val favBtn = button("⭐ Favori", GREY) { addFavoriteCurrent() }
-        favBtn.textSize = 13f
-        val shareBtn = button("↗ Partager", GREY) { shareTrip() }
-        shareBtn.textSize = 13f
-        tools.addView(viaBtn, LinearLayout.LayoutParams(0, -2, 1f).also { it.rightMargin = dp(6) })
-        tools.addView(favBtn, LinearLayout.LayoutParams(0, -2, 1f).also { it.rightMargin = dp(6) })
-        tools.addView(shareBtn, LinearLayout.LayoutParams(0, -2, 1f))
-        panel.addView(tools, LinearLayout.LayoutParams(-1, -2).also { it.topMargin = dp(8) })
+        val favBtn = button("⭐", GREY) { addFavoriteCurrent() }
+        compact(favBtn, 16f)
+        val shareBtn = button("↗", GREY) { shareTrip() }
+        compact(shareBtn, 16f)
+        modeRow.addView(viaBtn, LinearLayout.LayoutParams(0, -2, 1f).also { it.rightMargin = dp(4) })
+        modeRow.addView(favBtn, LinearLayout.LayoutParams(0, -2, 1f).also { it.rightMargin = dp(4) })
+        modeRow.addView(shareBtn, LinearLayout.LayoutParams(0, -2, 1f))
+        panel.addView(modeRow, LinearLayout.LayoutParams(-1, -2).also { it.topMargin = dp(6) })
         bottomBox.addView(panel, LinearLayout.LayoutParams(-1, -2))
         creditView = label(Lufop.CREDIT + "\nhttps://lufop.net", 10f, false, "#C0C7D6")
         creditView.gravity = Gravity.END
@@ -1181,7 +1184,8 @@ class MainActivity : Activity() {
         startBtn.text = if (navigating) "Arrêter" else "Démarrer"
         demoBtn.visibility = if (navigating) View.GONE else View.VISIBLE
         fromBtn.visibility = if (navigating) View.GONE else View.VISIBLE
-        fromBtn.text = "📍 Départ : " + (customStart?.name?.substringBefore(",") ?: "ma position")
+        fromBtn.text = "📍 " + (customStart?.name?.substringBefore(",") ?: "Ma position")
+        applyRadarVisibility()
         demoSpeedBtn.visibility = if (navigating && demo) View.VISIBLE else View.GONE
         startBtn.background = glossBtn(if (navigating) RED else GREEN)
         trafficBtn.alpha = if (prefs.bool("traffic", false)) 1f else 0.55f
@@ -1266,7 +1270,7 @@ class MainActivity : Activity() {
         st.transition = org.maplibre.android.style.layers.TransitionOptions(0, 0, false)
         widenRoads(st)
         basePois(!navigating)
-        for (id in listOf("radars", "reports", "route", "dest", "me", "incidents", "reach")) {
+        for (id in listOf("radars", "reports", "route", "alts", "dest", "me", "incidents", "reach")) {
             st.addSource(GeoJsonSource(id, FeatureCollection.fromFeatures(emptyList<Feature>())))
         }
         st.addLayer(
@@ -1276,6 +1280,22 @@ class MainActivity : Activity() {
                 PropertyFactory.lineCap(Property.LINE_CAP_ROUND),
                 PropertyFactory.lineJoin(Property.LINE_JOIN_ROUND)
             )
+        )
+        st.addLayerBelow(
+            LineLayer("alts-casing", "alts").withProperties(
+                PropertyFactory.lineColor("#FFFFFF"),
+                PropertyFactory.lineWidth(Expression.interpolate(Expression.exponential(1.6f), Expression.zoom(), Expression.stop(6, 5f), Expression.stop(12, 7f), Expression.stop(15, 10f), Expression.stop(17, 16f), Expression.stop(19, 28f))),
+                PropertyFactory.lineCap(Property.LINE_CAP_ROUND),
+                PropertyFactory.lineJoin(Property.LINE_JOIN_ROUND)
+            ), "route-casing"
+        )
+        st.addLayerBelow(
+            LineLayer("alts-layer", "alts").withProperties(
+                PropertyFactory.lineColor(Expression.get("c")),
+                PropertyFactory.lineWidth(Expression.interpolate(Expression.exponential(1.6f), Expression.zoom(), Expression.stop(6, 3f), Expression.stop(12, 4f), Expression.stop(15, 6f), Expression.stop(17, 10f), Expression.stop(19, 18f))),
+                PropertyFactory.lineCap(Property.LINE_CAP_ROUND),
+                PropertyFactory.lineJoin(Property.LINE_JOIN_ROUND)
+            ), "route-casing"
         )
         st.addLayer(
             LineLayer("route-layer", "route").withProperties(
@@ -1356,6 +1376,12 @@ class MainActivity : Activity() {
             listenersAdded = true
             m.addOnMapClickListener { ll ->
                 val pt = m.projection.toScreenLocation(ll)
+                if (route != null && !navigating && alts.size > 1) {
+                    val d = dp(16).toFloat()
+                    val ah = m.queryRenderedFeatures(android.graphics.RectF(pt.x - d, pt.y - d, pt.x + d, pt.y + d), "alts-layer").firstOrNull()
+                    val ai = if (ah != null && ah.hasProperty("i")) ah.getNumberProperty("i").toInt() else -1
+                    if (ai in alts.indices) { selectAlt(ai); return@addOnMapClickListener true }
+                }
                 val hit = m.queryRenderedFeatures(pt, "inc-layer").firstOrNull()
                 val id = hit?.getStringProperty("id")
                 val inc = incidents.firstOrNull { it.id == id }
@@ -1648,7 +1674,7 @@ class MainActivity : Activity() {
     }
 
     private fun applyRadarVisibility() {
-        val vis = if (prefs.bool("showFixed", true)) Property.VISIBLE else Property.NONE
+        val vis = if (prefs.bool("showFixed", true) && !(route != null && !navigating)) Property.VISIBLE else Property.NONE
         style?.getLayerAs<CircleLayer>("radar-layer")?.setProperties(PropertyFactory.visibility(vis))
         style?.getLayerAs<SymbolLayer>("radar-sym")?.setProperties(PropertyFactory.visibility(vis))
     }
@@ -2464,16 +2490,18 @@ class MainActivity : Activity() {
             if (radars.isNotEmpty()) append(" · ${radars.size} radar(s) sur le trajet")
             if (info.isNotEmpty()) append(" ($info)")
         }
-        etaView.text = "Arrivée ${eta(r.dur)}"
-        subView.text = summary(r.dur, r.dist) + extra
+        etaView.text = "Arrivée ${eta(r.dur)} · " + summary(r.dur, r.dist)
+        subView.text = extra.trimStart(' ', '·')
+        subView.visibility = if (subView.text.isBlank()) View.GONE else View.VISIBLE
         destView.text = destName + (if (vias.isNotEmpty()) " · via " + vias.joinToString(", ") { it.name.substringBefore(",") } else "")
         refreshAlts()
         refreshPanel()
         if (fit && !keepNav) {
             follow = false
             val b = LatLngBounds.Builder()
-            r.pts.forEach { b.include(LatLng(it.lat, it.lon)) }
-            map?.easeCamera(CameraUpdateFactory.newLatLngBounds(b.build(), dp(50), dp(110), dp(50), dp(250)), 900)
+            (if (alts.size > 1) alts.flatMap { it.pts } else r.pts).forEach { b.include(LatLng(it.lat, it.lon)) }
+            val bot = if (panel.height > 0) panel.height + bottomInset + dp(30) else dp(240)
+            map?.easeCamera(CameraUpdateFactory.newLatLngBounds(b.build(), dp(40), dp(110), dp(40), bot), 900)
         } else if (keepNav) {
             navDist.text = "Itinéraire recalculé"
         }
@@ -2519,8 +2547,29 @@ class MainActivity : Activity() {
         }
     }
 
+    private val ALT_COLORS = listOf("#1A4FB5", "#FF9F1C", "#26A69A")
+
+    /** Aperçu : les autres itinéraires restent visibles sur la carte, chacun dans sa couleur. */
+    private fun drawAlts() {
+        val src = style?.getSourceAs<GeoJsonSource>("alts") ?: return
+        if (alts.size < 2 || navigating || route == null) {
+            src.setGeoJson(FeatureCollection.fromFeatures(emptyList<Feature>()))
+            return
+        }
+        val fs = ArrayList<Feature>()
+        for ((i, r) in alts.withIndex()) {
+            if (i == altIdx) continue
+            val f = Feature.fromGeometry(org.maplibre.geojson.LineString.fromLngLats(r.pts.map { Point.fromLngLat(it.lon, it.lat) }))
+            f.addStringProperty("c", ALT_COLORS[i % ALT_COLORS.size])
+            f.addNumberProperty("i", i)
+            fs.add(f)
+        }
+        src.setGeoJson(FeatureCollection.fromFeatures(fs))
+    }
+
     private fun refreshAlts() {
         altRow.removeAllViews()
+        drawAlts()
         if (alts.size < 2 || navigating) {
             altRow.visibility = View.GONE
             return
@@ -2530,12 +2579,12 @@ class MainActivity : Activity() {
             val mins = (r.dur / 60).roundToInt()
             val dur = if (mins >= 60) "${mins / 60} h ${String.format(Locale.FRANCE, "%02d", mins % 60)}" else "$mins min"
             val b = button("${i + 1} · $dur\n${String.format(Locale.FRANCE, "%.0f", r.dist / 1000)} km", GREY) { selectAlt(i) }
-            b.textSize = 13f
+            b.textSize = 12f
             b.isSingleLine = false
             b.maxLines = 2
-            b.setPadding(dp(4), dp(8), dp(4), dp(8))
-            b.background = glossBtn(if (i == altIdx) ORANGE_L else GREY)
-            b.setTextColor(Color.parseColor(if (i == altIdx) "#0B1220" else "#FFFFFF"))
+            b.setPadding(dp(4), dp(5), dp(4), dp(5))
+            b.background = glossBtn(if (i == altIdx) BLUE else GREY)
+            b.setTextColor(if (i == altIdx) Color.WHITE else Color.parseColor(ALT_COLORS[i % ALT_COLORS.size]))
             altRow.addView(b, LinearLayout.LayoutParams(0, -2, 1f).also { it.rightMargin = dp(6) })
         }
     }
@@ -2596,6 +2645,7 @@ class MainActivity : Activity() {
         dest = null
         vias.clear()
         alts = emptyList()
+        drawAlts()
         pendingVia = false
         pendingStart = false
         customStart = null
@@ -2645,6 +2695,7 @@ class MainActivity : Activity() {
         stepIdx = 0
         farSaid = -1
         nearSaid = -1
+        drawAlts()
         if (prefs.bool("keepOn", true)) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         hideKeyboard()
         setResults(false)
