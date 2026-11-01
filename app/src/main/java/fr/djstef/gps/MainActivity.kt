@@ -77,7 +77,7 @@ import kotlin.math.roundToInt
 class MainActivity : Activity() {
 
     companion object {
-        const val VERSION = "0.71"
+        const val VERSION = "0.72"
         private val EURO_RE = Regex("^E\\s?\\d{1,3}$")
         private val SIGN_REF_RE = Regex("^([A-Z]{1,2}\\s?\\d{1,4}[A-Za-z]?)\\s*[·:-]\\s*(.*)$")
         private val VERS_RE = Regex("\\s+vers\\s+(.+)$")
@@ -163,6 +163,65 @@ class MainActivity : Activity() {
 
     private var me: Location? = null
     private var lastBearing = 0f
+    private lateinit var demoBtn: TextView
+    private lateinit var demoSpeedBtn: TextView
+    private var demo = false
+    private var demoMult = 1
+    private var demoPos = 0.0
+    private val demoTick = object : Runnable {
+        override fun run() {
+            if (!demo) return
+            val r = route
+            if (r == null || !navigating) { demo = false; return }
+            ensureRouteCum(r)
+            val c = routeCum ?: return
+            val total = c[c.size - 1]
+            val base = (r.dist / r.dur.coerceAtLeast(1.0)).coerceIn(8.0, 30.0)
+            demoPos = (demoPos + base * demoMult).coerceAtMost(total)
+            var lo = 0
+            var hi = c.size - 1
+            while (hi - lo > 1) { val mid = (lo + hi) / 2; if (c[mid] <= demoPos) lo = mid else hi = mid }
+            val a = r.pts[lo]
+            val b = r.pts[hi]
+            val seg = (c[hi] - c[lo]).coerceAtLeast(0.01)
+            val f = ((demoPos - c[lo]) / seg).coerceIn(0.0, 1.0)
+            val loc = Location("demo")
+            loc.latitude = a.lat + (b.lat - a.lat) * f
+            loc.longitude = a.lon + (b.lon - a.lon) * f
+            loc.speed = (base * demoMult).toFloat()
+            loc.bearing = Geo.bearing(a, b).toFloat()
+            loc.accuracy = 5f
+            loc.time = System.currentTimeMillis()
+            onLocation(loc)
+            if (demoPos >= total) { demo = false; refreshPanel(); return }
+            rootLayout.postDelayed(this, 1000L)
+        }
+    }
+
+    private fun startDemo() {
+        val r = route ?: return
+        demo = true
+        demoMult = 1
+        demoPos = 0.0
+        demoSpeedBtn.text = "×1"
+        lastLimitPt = null
+        if (!navigating) startNavigation()
+        refreshPanel()
+        rootLayout.removeCallbacks(demoTick)
+        rootLayout.post(demoTick)
+        toast("Démo : appuie sur ×1 pour accélérer")
+    }
+
+    private fun cycleDemoSpeed() {
+        demoMult = if (demoMult >= 4) 1 else demoMult + 1
+        demoSpeedBtn.text = "×$demoMult"
+    }
+
+    private fun stopDemo() {
+        if (!demo) return
+        demo = false
+        rootLayout.removeCallbacks(demoTick)
+    }
     private var follow = true
     private var zoomBoost = 0.0
     private lateinit var carView: ImageView
@@ -627,6 +686,9 @@ class MainActivity : Activity() {
         actions.addView(startBtn, LinearLayout.LayoutParams(0, -2, 2f).also { it.rightMargin = dp(6) })
         actions.addView(cancelBtn, LinearLayout.LayoutParams(0, -2, 1f))
         panel.addView(actions, LinearLayout.LayoutParams(-1, -2).also { it.topMargin = dp(10) })
+        demoBtn = button("▶ Démo : simuler le trajet", BLUE) { startDemo() }
+        demoBtn.textSize = 14f
+        panel.addView(demoBtn, LinearLayout.LayoutParams(-1, -2).also { it.topMargin = dp(8) })
         val tools = LinearLayout(this)
         tools.orientation = LinearLayout.HORIZONTAL
         viaBtn = button("＋ Étape", GREY) { addViaStart() }
@@ -705,6 +767,13 @@ class MainActivity : Activity() {
         botRow.gravity = Gravity.CENTER_VERTICAL
         botRow.addView(navStop)
         botRow.addView(navDestV, LinearLayout.LayoutParams(0, -2, 1f).also { it.leftMargin = dp(10); it.rightMargin = dp(10) })
+        demoSpeedBtn = circleBtn("×1", 48) { cycleDemoSpeed() }
+        demoSpeedBtn.elevation = 0f
+        demoSpeedBtn.alpha = 1f
+        demoSpeedBtn.textSize = 17f
+        demoSpeedBtn.background = GradientDrawable().also { it.shape = GradientDrawable.OVAL; it.setColor(Color.parseColor("#1565C0")) }
+        demoSpeedBtn.visibility = View.GONE
+        botRow.addView(demoSpeedBtn, LinearLayout.LayoutParams(-2, -2).also { it.rightMargin = dp(8) })
         botRow.addView(altBtn)
         navBand.addView(botRow, LinearLayout.LayoutParams(-1, -2).also { it.topMargin = dp(8); it.bottomMargin = dp(6) })
         bottomBox.addView(navBand, LinearLayout.LayoutParams(-1, -2))
@@ -1039,6 +1108,8 @@ class MainActivity : Activity() {
         cancelBtn.visibility = if (navigating) View.GONE else View.VISIBLE
         viaBtn.visibility = if (navigating) View.GONE else View.VISIBLE
         startBtn.text = if (navigating) "Arrêter" else "Démarrer"
+        demoBtn.visibility = if (navigating) View.GONE else View.VISIBLE
+        demoSpeedBtn.visibility = if (navigating && demo) View.VISIBLE else View.GONE
         startBtn.background = glossBtn(if (navigating) RED else GREEN)
         trafficBtn.alpha = if (prefs.bool("traffic", false)) 1f else 0.55f
         searchRow.visibility = if (navigating) View.GONE else View.VISIBLE
@@ -1817,6 +1888,7 @@ class MainActivity : Activity() {
     }
 
     private fun onLocation(loc: Location) {
+        if (demo && loc.provider != "demo") return
         val prev = me
         if (prev != null && loc.provider == LocationManager.NETWORK_PROVIDER &&
             prev.provider == LocationManager.GPS_PROVIDER && loc.time - prev.time < 10000
@@ -1828,7 +1900,7 @@ class MainActivity : Activity() {
         val kmh = if (loc.hasSpeed()) (loc.speed * 3.6f).roundToInt() else 0
         updateLimit(loc)
         val lim = limitNow
-        val over = lim != null && kmh > lim + 3
+        val over = !demo && lim != null && kmh > lim + 3
         speedView.set(kmh, over)
         NavBridge.me = loc
         NavBridge.speed = kmh
@@ -2485,6 +2557,7 @@ class MainActivity : Activity() {
 
     private fun stopNavigation() {
         if (!navigating) return
+        stopDemo()
         navigating = false
         basePois(true)
         zoomBoost = 0.0
