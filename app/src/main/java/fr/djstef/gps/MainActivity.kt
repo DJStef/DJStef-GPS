@@ -77,7 +77,7 @@ import kotlin.math.roundToInt
 class MainActivity : Activity() {
 
     companion object {
-        const val VERSION = "0.67"
+        const val VERSION = "0.68"
         private val EURO_RE = Regex("^E\\s?\\d{1,3}$")
         private val SIGN_REF_RE = Regex("^([A-Z]{1,2}\\s?\\d{1,4}[A-Za-z]?)\\s*[·:-]\\s*(.*)$")
         private val VERS_RE = Regex("\\s+vers\\s+(.+)$")
@@ -189,6 +189,8 @@ class MainActivity : Activity() {
     private var trafficEta: Pair<Double, Long>? = null
     private var trafficDelay = 0.0
     private var trafficFactor: Double? = null
+    private var voiceStep = -1
+    private var voiceLvl = 0
     private var trafBase = 0.0
     private var arrived = false
     private var stopCount = 0
@@ -1325,6 +1327,51 @@ class MainActivity : Activity() {
 
     // --- Voiture sur la carte ---
 
+    /** Hors guidage : un repère rond en relief avec flèche, à la place de la voiture. */
+    private fun usePuck() = !navigating
+
+    private var puckBmp: android.graphics.Bitmap? = null
+    private var carShown: android.graphics.Bitmap? = null
+    private fun puckBitmap(): android.graphics.Bitmap {
+        puckBmp?.let { return it }
+        val n = 192
+        val bmp = android.graphics.Bitmap.createBitmap(n, n, android.graphics.Bitmap.Config.ARGB_8888)
+        val c = android.graphics.Canvas(bmp)
+        val p = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG)
+        val cx = n / 2f
+        val cy = n / 2f
+        // halo
+        p.shader = android.graphics.RadialGradient(cx, cy, n / 2f, intArrayOf(Color.parseColor("#661A4FB5"), Color.parseColor("#001A4FB5")), floatArrayOf(0.35f, 1f), android.graphics.Shader.TileMode.CLAMP)
+        c.drawCircle(cx, cy, n / 2f, p)
+        p.shader = null
+        // ombre portée
+        p.color = Color.argb(70, 0, 0, 0)
+        c.drawOval(android.graphics.RectF(cx - 40f, cy + 26f, cx + 40f, cy + 52f), p)
+        // sphère en relief
+        val r = 40f
+        p.shader = android.graphics.RadialGradient(cx - 12f, cy - 16f, r * 1.5f,
+            intArrayOf(Color.parseColor("#A9D4FF"), Color.parseColor("#2F6BE0"), Color.parseColor("#0B2A6B")),
+            floatArrayOf(0f, 0.5f, 1f), android.graphics.Shader.TileMode.CLAMP)
+        c.drawCircle(cx, cy - 4f, r, p)
+        p.shader = null
+        p.style = android.graphics.Paint.Style.STROKE
+        p.strokeWidth = 7f
+        p.color = Color.WHITE
+        c.drawCircle(cx, cy - 4f, r, p)
+        // flèche de direction
+        p.style = android.graphics.Paint.Style.FILL
+        p.color = Color.WHITE
+        val a = android.graphics.Path()
+        a.moveTo(cx, cy - 36f)
+        a.lineTo(cx + 17f, cy + 14f)
+        a.lineTo(cx, cy + 4f)
+        a.lineTo(cx - 17f, cy + 14f)
+        a.close()
+        c.drawPath(a, p)
+        puckBmp = bmp
+        return bmp
+    }
+
     private fun carMode3d() = navigating && prefs.bool("view3d", true) && !prefs.bool("northUp", false)
 
     private fun applyCar() {
@@ -1377,15 +1424,17 @@ class MainActivity : Activity() {
         if (!::carView.isInitialized) return
         val m = map ?: return
         val l = me
-        val bmp = (if (carMode3d()) carRearBmp else carTopBmp)
-        if (l == null || bmp == null || mapView.width == 0) {
+        val puck = usePuck()
+        val bmp = if (puck) puckBitmap() else (if (carMode3d()) carRearBmp else carTopBmp)
+        if (l == null || bmp == null || mapView.width == 0 || menuView != null) {
             carView.visibility = View.INVISIBLE
             return
         }
+        if (carShown !== bmp) { carShown = bmp; carView.setImageBitmap(bmp) }
         val cp = m.cameraPosition
         val size = prefs.float("carSize", 1f)
-        val is3d = carMode3d()
-        val scale = ((if (is3d) 0.5 else 0.4) * size * zoomFactor(cp.zoom)).toFloat()
+        val is3d = !puck && carMode3d()
+        val scale = (if (puck) 0.6 * zoomFactor(cp.zoom) else (if (is3d) 0.5 else 0.4) * size * zoomFactor(cp.zoom)).toFloat()
         val w = bmp.width
         val h = bmp.height
         if (carView.layoutParams.width != w || carView.layoutParams.height != h) {
@@ -1421,7 +1470,7 @@ class MainActivity : Activity() {
         val layer = style?.getLayerAs<SymbolLayer>("me-layer") ?: return
         val size = prefs.float("carSize", 1f)
         layer.setProperties(PropertyFactory.visibility(Property.NONE))
-        carView.setImageBitmap(if (carMode3d()) carRearBmp else carTopBmp)
+        carShown = null
         positionCar()
         if (carMode3d()) {
             // Vue de derrière, « debout » face à la caméra inclinée
@@ -1860,7 +1909,7 @@ class MainActivity : Activity() {
         val ref = refs.firstOrNull()?.let { it.replace(Regex("^([A-Z]+)(\\d)"), "$1 $2") } ?: ""
         if (name.isNotBlank() && ref.isNotBlank() && norm(name) == norm(ref)) name = ""
         val txt = listOf(ref, name).filter { it.isNotBlank() }.joinToString(" · ")
-        val show = txt.isNotBlank() && prefs.bool("showRoadName", true)
+        val show = txt.isNotBlank() && prefs.bool("showRoadName", true) && menuView == null
         if (txt != carName.text.toString()) {
             carName.text = txt
             val (bg, fg) = when (ref.firstOrNull()) {
@@ -2448,8 +2497,14 @@ class MainActivity : Activity() {
     }
 
     private fun distSay(m: Double): String {
-        val r = (m / 10).roundToInt() * 10
-        return if (r >= 1000) String.format(Locale.FRANCE, "%.1f kilomètre", r / 1000.0) else "$r mètres"
+        if (m >= 1000) {
+            val km = (m / 100).roundToInt() / 10.0
+            return if (km >= 2.0) String.format(Locale.FRANCE, "%.1f kilomètres", km).replace(",0 ", " ")
+            else String.format(Locale.FRANCE, "%.1f kilomètre", km).replace(",0 ", " ")
+        }
+        val step = if (m >= 300) 50 else 10
+        val r = (m / step).roundToInt() * step
+        return "$r mètres"
     }
 
     /** Distances cumulées le long du tracé, et position de chaque manœuvre sur ce tracé. */
@@ -2606,14 +2661,24 @@ class MainActivity : Activity() {
         NavBridge.remainDist = remain
         NavBridge.remainSec = remTime
 
-        val far = if (loc.speed > 16f) 600.0 else if (loc.speed > 8f) 350.0 else 150.0
-        if (dNext < 60.0 && nearSaid != stepIdx) {
+        // Annonces calées sur le temps restant avant la manœuvre (selon la vitesse), pas sur une distance fixe :
+        // loin (~40 s), intermédiaire (~14 s, seulement au-dessus de 50 km/h), puis consigne finale (~5 s).
+        if (voiceStep != stepIdx) { voiceStep = stepIdx; voiceLvl = 0 }
+        val v = maxOf(loc.speed.toDouble(), 4.0)
+        val farD = (v * 40).coerceIn(300.0, 2500.0)
+        val midD = (v * 14).coerceIn(150.0, 700.0)
+        val nearD = (v * 5).coerceIn(40.0, 220.0)
+        val lvl = when {
+            dNext <= nearD -> 3
+            v > 14.0 && dNext <= midD -> 2
+            dNext <= farD -> 1
+            else -> 0
+        }
+        if (lvl > voiceLvl) {
+            voiceLvl = lvl
+            farSaid = stepIdx
             nearSaid = stepIdx
-            farSaid = stepIdx
-            speak(next.text)
-        } else if (dNext < far && farSaid != stepIdx) {
-            farSaid = stepIdx
-            speak("Dans ${distSay(dNext)}, ${next.text}")
+            if (lvl == 3) speak(next.text) else speak("Dans ${distSay(dNext)}, ${next.text}")
         }
     }
 
@@ -3203,6 +3268,8 @@ class MainActivity : Activity() {
         menuView?.let { rootLayout.removeView(it) }
         menuView = null
         menuPage = null
+        updateRoadName()
+        positionCar()
     }
 
     private fun pageColor(page: String?): String = when (page) {
@@ -3237,7 +3304,9 @@ class MainActivity : Activity() {
     private fun showMenu(page: String?) {
         menuView?.let { rootLayout.removeView(it) }
         menuPage = page
+        carName.visibility = View.GONE
         val v = LinearLayout(this)
+        v.elevation = dp(40).toFloat()
         v.orientation = LinearLayout.VERTICAL
         v.setBackgroundColor(Color.parseColor(BG))
         v.isClickable = true
