@@ -77,7 +77,7 @@ import kotlin.math.roundToInt
 class MainActivity : Activity() {
 
     companion object {
-        const val VERSION = "0.70"
+        const val VERSION = "0.71"
         private val EURO_RE = Regex("^E\\s?\\d{1,3}$")
         private val SIGN_REF_RE = Regex("^([A-Z]{1,2}\\s?\\d{1,4}[A-Za-z]?)\\s*[·:-]\\s*(.*)$")
         private val VERS_RE = Regex("\\s+vers\\s+(.+)$")
@@ -579,6 +579,7 @@ class MainActivity : Activity() {
         infoRow = LinearLayout(this)
         infoRow.orientation = LinearLayout.VERTICAL
         infoRow.gravity = Gravity.BOTTOM or Gravity.START
+        infoRow.visibility = View.GONE
         speedView = SpeedBubble(this)
         limitView = SignView(this)
         limitView.visibility = View.GONE
@@ -716,10 +717,13 @@ class MainActivity : Activity() {
         root.addView(bottomBox, bLp)
         navBand.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> placeRoadName() }
         bottomBox.addOnLayoutChangeListener { _, _, top, _, bottom, _, _, _, _ ->
-            bottomH = bottom - top
+            val nh = bottom - top
             placeSide()
-            applyMapMargins()
-            applyNavPadding()
+            if (nh != bottomH) {
+                bottomH = nh
+                applyMapMargins()
+                applyNavPadding()
+            }
             placeRoadName()
         }
 
