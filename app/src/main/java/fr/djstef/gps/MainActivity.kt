@@ -77,7 +77,7 @@ import kotlin.math.roundToInt
 class MainActivity : Activity() {
 
     companion object {
-        const val VERSION = "0.66"
+        const val VERSION = "0.67"
         private val EURO_RE = Regex("^E\\s?\\d{1,3}$")
         private val SIGN_REF_RE = Regex("^([A-Z]{1,2}\\s?\\d{1,4}[A-Za-z]?)\\s*[·:-]\\s*(.*)$")
         private val VERS_RE = Regex("\\s+vers\\s+(.+)$")
@@ -188,6 +188,14 @@ class MainActivity : Activity() {
     private var listenersAdded = false
     private var trafficEta: Pair<Double, Long>? = null
     private var trafficDelay = 0.0
+    private var trafficFactor: Double? = null
+    private var trafBase = 0.0
+    private var arrived = false
+    private var stopCount = 0
+    private var lastCheckMs = 0L
+    private var routeCum: DoubleArray? = null
+    private var stepCum: DoubleArray? = null
+    private var cumFor: Route? = null
     private var lastEtaFetch = 0L
     private var etaBusy = false
     private var zoomInBtn: View? = null
@@ -1247,7 +1255,7 @@ class MainActivity : Activity() {
 
     private fun paintTraffic(r: Route, secs: List<TrafSec>) {
         scope.launch {
-            val cols = withContext(Dispatchers.Default) {
+            val cols = run {
                 val a = arrayOfNulls<String>(r.pts.size)
                 for (sc in secs) {
                     val s0 = Geo.snap(sc.from, r.pts, 0, r.pts.size - 1) ?: continue
@@ -2221,6 +2229,9 @@ class MainActivity : Activity() {
         nearSaid = -1
         offCount = 0
         trafficEta = null
+        trafficFactor = null
+        arrived = false
+        stopCount = 0
         routeCols = null
         lastEtaFetch = 0L
         style?.getSourceAs<GeoJsonSource>("route")?.setGeoJson(routeGeo(r))
@@ -2321,6 +2332,7 @@ class MainActivity : Activity() {
                 val delay = res.second
                 trafficEta = Pair(sec, System.currentTimeMillis())
                 trafficDelay = delay
+                if (navigating && trafBase > 60.0) trafficFactor = (sec / trafBase).coerceIn(0.5, 3.0)
                 route?.let { paintTraffic(it, res.third) }
                 if (preview && !navigating) {
                     etaView.text = "Arrivée ${eta(sec)}"
@@ -2440,14 +2452,70 @@ class MainActivity : Activity() {
         return if (r >= 1000) String.format(Locale.FRANCE, "%.1f kilomètre", r / 1000.0) else "$r mètres"
     }
 
+    /** Distances cumulées le long du tracé, et position de chaque manœuvre sur ce tracé. */
+    private fun ensureRouteCum(r: Route) {
+        if (cumFor === r && routeCum != null) return
+        val n = r.pts.size
+        val c = DoubleArray(n)
+        for (i in 1 until n) c[i] = c[i - 1] + Geo.dist(r.pts[i - 1], r.pts[i])
+        val sc = DoubleArray(r.steps.size)
+        var from = 0
+        var prev = 0.0
+        for (j in r.steps.indices) {
+            val sn = Geo.snap(r.steps[j].at, r.pts, from, n - 1)
+            if (sn != null) {
+                val idx = Geo.lastSnapIdx
+                prev = maxOf(prev, c[idx] + Geo.dist(r.pts[idx], sn.first))
+                from = maxOf(0, idx - 2)
+            }
+            sc[j] = prev
+        }
+        if (sc.isNotEmpty()) sc[sc.size - 1] = c[n - 1]
+        routeCum = c
+        stepCum = sc
+        cumFor = r
+    }
+
+    /** Fin de parcours : message d'arrivée affiché quelques secondes, puis retour à la carte. */
+    private fun arrive(r: Route) {
+        if (arrived) return
+        arrived = true
+        speak("Vous êtes arrivé à destination")
+        navArrow.set(4, "")
+        navDist.text = "Arrivé !"
+        navToward.text = "Vous êtes arrivé à destination"
+        navToward.visibility = View.VISIBLE
+        navStreet.text = destName.substringBefore(",")
+        navRoad.visibility = View.GONE
+        navRoad2.visibility = View.GONE
+        navEta.text = "0 min"
+        navSub.text = "0 m"
+        navArr.text = eta(0.0)
+        rootLayout.postDelayed({
+            if (arrived && route === r) {
+                arrived = false
+                clearRoute()
+            }
+        }, 7000)
+    }
+
     private fun navUpdate(loc: Location) {
         val r = route ?: return
         val p = Pt(loc.latitude, loc.longitude)
 
-        val offD = (Geo.snap(p, r.pts, snapIdx - 30, snapIdx + 400)?.third
-            ?: Geo.snap(p, r.pts, 0, r.pts.size - 1)?.third) ?: Double.MAX_VALUE
-        val offDist = if (offD > 80.0) Geo.distToRoute(p, r.pts) else offD
-        if (offDist > 80.0) {
+        if (arrived) return
+        ensureRouteCum(r)
+        val cum = routeCum ?: return
+        val sc = stepCum ?: return
+        // Position réelle le long de l'itinéraire (accrochage sur le tracé) : plus fiable que la proximité des manœuvres
+        var sn = Geo.snap(p, r.pts, snapIdx - 30, snapIdx + 400)
+        var si = Geo.lastSnapIdx
+        if (sn == null || sn.third > 80.0) {
+            sn = Geo.snap(p, r.pts, 0, r.pts.size - 1)
+            si = Geo.lastSnapIdx
+        }
+        val offDist = sn?.third ?: Double.MAX_VALUE
+        if (offDist > 80.0 || sn == null) {
             offCount++
             if (offCount >= 3 && !rerouting) {
                 rerouting = true
@@ -2459,8 +2527,12 @@ class MainActivity : Activity() {
         } else {
             offCount = 0
         }
+        snapIdx = si
+        val curCum = cum[si] + Geo.dist(r.pts[si], sn.first)
+        val total = cum[cum.size - 1]
+        var remain = (total - curCum).coerceAtLeast(0.0)
 
-        while (stepIdx + 1 < r.steps.size - 1 && Geo.dist(p, r.steps[stepIdx + 1].at) < 25.0) {
+        while (stepIdx + 1 < r.steps.size - 1 && sc[stepIdx + 1] <= curCum + 20.0) {
             stepIdx++
             farSaid = -1
             nearSaid = -1
@@ -2468,18 +2540,26 @@ class MainActivity : Activity() {
         }
         updateRoadName()
         val next = r.steps.getOrNull(stepIdx + 1) ?: return
-        val dNext = Geo.dist(p, next.at)
+        val dNext = (sc[stepIdx + 1] - curCum).coerceAtLeast(0.0)
 
-        if (stepIdx + 1 >= r.steps.size - 1 && dNext < 30.0) {
-            speak("Vous êtes arrivé à destination")
-            toast("Arrivé à destination")
-            clearRoute()
+        // Arrivée : fin du tracé, ou à l'arrêt tout près de la destination
+        val straight = dest?.let { Geo.dist(p, it) } ?: remain
+        if (loc.speed < 1.0f && straight < 120.0) stopCount++ else if (loc.speed >= 2.0f) stopCount = 0
+        if (remain < 40.0 || straight < 25.0 || stopCount >= 8) {
+            arrive(r)
             return
         }
 
-        var remain = dNext
-        for (j in stepIdx + 1 until r.steps.size) remain += r.steps[j].dist
-        val remTime = if (r.dist > 0) r.dur * remain / r.dist else 0.0
+        // Contrôle de cohérence toutes les 2 min : la distance à vol d'oiseau ne peut pas dépasser la distance restante
+        val nowCk = System.currentTimeMillis()
+        if (nowCk - lastCheckMs > 120000) {
+            lastCheckMs = nowCk
+            if (straight > remain + 200.0) {
+                snapIdx = 0
+                lastEtaFetch = 0L
+            }
+        }
+        val remTime = if (total > 0) r.dur * remain / total else 0.0
         navArrow.set(next.kind, next.text)
         navDist.text = if (dNext >= 1000) String.format(Locale.FRANCE, "%.1f km", dNext / 1000) else "${(dNext / 10).roundToInt() * 10} m"
         val vm = VERS_RE.find(next.text)
@@ -2503,9 +2583,10 @@ class MainActivity : Activity() {
         styleRoad(navRoad, allRefs, 18f)
         roadView.visibility = View.GONE
         val nowMs = System.currentTimeMillis()
-        if (nowMs - lastEtaFetch > 180000) dest?.let { fetchTrafficEta(p, it, false) }
+        if (nowMs - lastEtaFetch > 180000) { trafBase = remTime; dest?.let { fetchTrafficEta(p, it, false) } }
         val te = trafficEta
-        val shown = if (te != null && nowMs - te.second < 360000) te.first else remTime
+        val tf = trafficFactor
+        val shown = if (te != null && tf != null && nowMs - te.second < 600000) remTime * tf else remTime
         etaView.text = "Arrivée ${eta(shown)}"
         subView.text = summary(shown, remain) + (if (te != null && trafficDelay >= 120) " · trafic +${(trafficDelay / 60).roundToInt()} min" else "")
         val bandMin = (shown / 60).roundToInt()
