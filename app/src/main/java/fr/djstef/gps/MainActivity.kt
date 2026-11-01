@@ -77,7 +77,7 @@ import kotlin.math.roundToInt
 class MainActivity : Activity() {
 
     companion object {
-        const val VERSION = "0.74"
+        const val VERSION = "0.75"
         private val EURO_RE = Regex("^E\\s?\\d{1,3}$")
         private val SIGN_REF_RE = Regex("^([A-Z]{1,2}\\s?\\d{1,4}[A-Za-z]?)\\s*[·:-]\\s*(.*)$")
         private val VERS_RE = Regex("\\s+vers\\s+(.+)$")
@@ -118,6 +118,8 @@ class MainActivity : Activity() {
     private lateinit var exitSign: LinearLayout
     private lateinit var exitTop: TextView
     private lateinit var exitDest: TextView
+    private lateinit var exitNumV: TextView
+    private lateinit var exitArrowV: TextView
     private lateinit var sideMore: LinearLayout
     private lateinit var moreBtn: TextView
 
@@ -192,7 +194,8 @@ class MainActivity : Activity() {
             val loc = Location("demo")
             loc.latitude = a.lat + (b.lat - a.lat) * f
             loc.longitude = a.lon + (b.lon - a.lon) * f
-            loc.speed = (base * demoMult).toFloat()
+            loc.speed = base.toFloat()
+            loc.elapsedRealtimeNanos = android.os.SystemClock.elapsedRealtimeNanos()
             loc.bearing = Geo.bearing(a, b).toFloat()
             loc.accuracy = 5f
             loc.time = System.currentTimeMillis()
@@ -219,7 +222,7 @@ class MainActivity : Activity() {
     }
 
     private fun cycleDemoSpeed() {
-        demoMult = if (demoMult >= 4) 1 else demoMult + 1
+        demoMult = if (demoMult >= 16) 1 else demoMult * 2
         demoSpeedBtn.text = "×$demoMult"
     }
 
@@ -581,21 +584,37 @@ class MainActivity : Activity() {
         navCol.addView(navStreet)
         navBanner.addView(navCol, LinearLayout.LayoutParams(0, -2, 1f).also { it.leftMargin = dp(8) })
         topBox.addView(navBanner, LinearLayout.LayoutParams(-1, -2))
-        // Panneau bleu de sortie d'autoroute
+        // Panneau bleu de sortie d'autoroute (style panneau routier français)
         exitSign = LinearLayout(this)
-        exitSign.orientation = LinearLayout.VERTICAL
+        exitSign.orientation = LinearLayout.HORIZONTAL
+        exitSign.gravity = Gravity.CENTER_VERTICAL
         exitSign.background = GradientDrawable().also {
-            it.setColor(Color.parseColor("#0A4DA3")); it.cornerRadius = dp(10).toFloat(); it.setStroke(dp(3), Color.WHITE)
+            it.setColor(Color.parseColor("#0B4EA2")); it.cornerRadius = dp(12).toFloat(); it.setStroke(dp(4), Color.WHITE)
         }
-        exitSign.setPadding(dp(14), dp(8), dp(14), dp(10))
+        exitSign.setPadding(dp(12), dp(8), dp(12), dp(8))
         exitSign.elevation = dp(6).toFloat()
         exitSign.visibility = View.GONE
-        exitTop = label("", 15f, true, "#FFFFFF").also { it.typeface = CONDENSED }
+        exitNumV = TextView(this)
+        exitNumV.setTextColor(Color.parseColor("#0B4EA2"))
+        exitNumV.textSize = 22f
+        exitNumV.typeface = CONDENSED
+        exitNumV.gravity = Gravity.CENTER
+        exitNumV.setPadding(dp(10), dp(2), dp(10), dp(2))
+        exitNumV.minWidth = dp(44)
+        exitNumV.background = GradientDrawable().also { it.setColor(Color.WHITE); it.cornerRadius = dp(6).toFloat() }
+        exitNumV.visibility = View.GONE
+        val exitCol = LinearLayout(this)
+        exitCol.orientation = LinearLayout.VERTICAL
+        exitTop = label("", 14f, true, "#DCE8FA").also { it.typeface = CONDENSED }
         exitDest = label("", 21f, true, "#FFFFFF")
         exitDest.maxLines = 2
         exitDest.ellipsize = android.text.TextUtils.TruncateAt.END
-        exitSign.addView(exitTop)
-        exitSign.addView(exitDest)
+        exitCol.addView(exitTop)
+        exitCol.addView(exitDest)
+        exitArrowV = label("↗", 34f, true, "#FFFFFF")
+        exitSign.addView(exitNumV, LinearLayout.LayoutParams(-2, -2).also { it.rightMargin = dp(10) })
+        exitSign.addView(exitCol, LinearLayout.LayoutParams(0, -2, 1f))
+        exitSign.addView(exitArrowV, LinearLayout.LayoutParams(-2, -2).also { it.leftMargin = dp(8) })
         topBox.addView(exitSign, LinearLayout.LayoutParams(-1, -2).also { it.topMargin = dp(6) })
 
         radarBox = LinearLayout(this)
@@ -647,6 +666,13 @@ class MainActivity : Activity() {
             }
         }
         side.addView(sideMore)
+        demoSpeedBtn = circleBtn("×1", 56) { cycleDemoSpeed() }
+        demoSpeedBtn.alpha = 1f
+        demoSpeedBtn.textSize = 22f
+        demoSpeedBtn.background = GradientDrawable().also { it.shape = GradientDrawable.OVAL; it.setColor(Color.parseColor("#1565C0")) }
+        demoSpeedBtn.visibility = View.GONE
+        side.addView(demoSpeedBtn)
+        (demoSpeedBtn.layoutParams as LinearLayout.LayoutParams).topMargin = dp(10)
         stopSideBtn = circleBtn("✕", 56) { stopNavigation() }
         stopSideBtn.background = GradientDrawable().also { it.shape = GradientDrawable.OVAL; it.setColor(Color.parseColor(RED)) }
         stopSideBtn.alpha = 1f
@@ -812,13 +838,6 @@ class MainActivity : Activity() {
         botRow.orientation = LinearLayout.HORIZONTAL
         botRow.gravity = Gravity.CENTER_VERTICAL
         botRow.addView(navDestV, LinearLayout.LayoutParams(0, -2, 1f).also { it.leftMargin = dp(10); it.rightMargin = dp(10) })
-        demoSpeedBtn = circleBtn("×1", 48) { cycleDemoSpeed() }
-        demoSpeedBtn.elevation = 0f
-        demoSpeedBtn.alpha = 1f
-        demoSpeedBtn.textSize = 17f
-        demoSpeedBtn.background = GradientDrawable().also { it.shape = GradientDrawable.OVAL; it.setColor(Color.parseColor("#1565C0")) }
-        demoSpeedBtn.visibility = View.GONE
-        botRow.addView(demoSpeedBtn, LinearLayout.LayoutParams(-2, -2).also { it.rightMargin = dp(8) })
         botRow.addView(altBtn)
         navBand.addView(botRow, LinearLayout.LayoutParams(-1, -2).also { it.topMargin = dp(8); it.bottomMargin = dp(6) })
         bottomBox.addView(navBand, LinearLayout.LayoutParams(-1, -2))
@@ -1856,7 +1875,7 @@ class MainActivity : Activity() {
             tBear = if (prefs.bool("northUp", false)) 0.0 else lastBearing.toDouble()
             fixLat = loc.latitude
             fixLon = loc.longitude
-            fixSpeed = if (loc.hasSpeed() && loc.speed > 1.0f) loc.speed.toDouble() else 0.0
+            fixSpeed = if (!demo && loc.hasSpeed() && loc.speed > 1.0f) loc.speed.toDouble() else 0.0
             fixBear = if (loc.hasBearing() && loc.speed > 1.5f) loc.bearing else lastBearing
             // Accrochage à l'itinéraire : la voiture et la caméra restent centrées sur le trait bleu
             route?.let { r ->
@@ -2792,10 +2811,14 @@ class MainActivity : Activity() {
         styleRoad(navRoad, allRefs, 18f)
         val exitNum = Regex("Sortie\\s+(\\S+)").find(next.sign)?.groupValues?.get(1)
         val exitTo = towardTxt.removePrefix("vers ").trim().ifBlank { next.name }
-        if (next.kind in 17..24 && next.sign.isNotBlank() && (exitNum != null || exitTo.isNotBlank()) && dNext < 6000) {
-            exitTop.text = (allRefs.firstOrNull()?.let { "$it  ·  " } ?: "") + (exitNum?.let { "SORTIE $it" } ?: "SORTIE")
+        val isExit = next.kind in 17..21 || (next.kind in 22..24 && next.sign.isNotBlank())
+        if (isExit && (exitNum != null || exitTo.isNotBlank()) && dNext < 6000) {
+            exitTop.text = (allRefs.firstOrNull()?.let { "$it  ·  " } ?: "") + "SORTIE"
+            exitNumV.text = exitNum ?: ""
+            exitNumV.visibility = if (exitNum != null) View.VISIBLE else View.GONE
             exitDest.text = exitTo
             exitDest.visibility = if (exitTo.isBlank()) View.GONE else View.VISIBLE
+            exitArrowV.text = if (next.kind in intArrayOf(19, 21, 24)) "↖" else "↗"
             exitSign.visibility = View.VISIBLE
         } else exitSign.visibility = View.GONE
         roadView.visibility = View.GONE
