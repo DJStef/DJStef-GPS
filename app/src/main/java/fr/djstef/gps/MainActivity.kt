@@ -77,7 +77,7 @@ import kotlin.math.roundToInt
 class MainActivity : Activity() {
 
     companion object {
-        const val VERSION = "0.68"
+        const val VERSION = "0.69"
         private val EURO_RE = Regex("^E\\s?\\d{1,3}$")
         private val SIGN_REF_RE = Regex("^([A-Z]{1,2}\\s?\\d{1,4}[A-Za-z]?)\\s*[·:-]\\s*(.*)$")
         private val VERS_RE = Regex("\\s+vers\\s+(.+)$")
@@ -395,6 +395,7 @@ class MainActivity : Activity() {
 
     private fun hideKeyboard() {
         (getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).hideSoftInputFromWindow(searchBox.windowToken, 0)
+        searchBox.clearFocus()
     }
 
     // ---------- Interface principale (portrait) ----------
@@ -452,7 +453,7 @@ class MainActivity : Activity() {
         searchBox.setOnEditorActionListener { _, id, _ ->
             if (id == EditorInfo.IME_ACTION_SEARCH) { doSearch(); true } else false
         }
-        searchBox.setOnFocusChangeListener { _, has -> if (has && searchBox.text.isNullOrBlank()) fillSuggestions() }
+        searchBox.setOnFocusChangeListener { _, has -> if (has && searchBox.text.isNullOrBlank()) fillSuggestions(); updateRoadName() }
         searchBox.setOnClickListener { if (searchBox.text.isNullOrBlank()) fillSuggestions() }
         searchRow.addView(searchBox, LinearLayout.LayoutParams(0, -2, 1f))
         val micBtn = circleBtn("🎤", 48) { startVoice() }
@@ -466,7 +467,7 @@ class MainActivity : Activity() {
         val resScroll = object : ScrollView(this) {
             // La liste ne dépasse jamais 55 % de l'écran, pour rester lisible au-dessus de la carte
             override fun onMeasure(w: Int, h: Int) {
-                super.onMeasure(w, View.MeasureSpec.makeMeasureSpec((resources.displayMetrics.heightPixels * 0.55).toInt(), View.MeasureSpec.AT_MOST))
+                super.onMeasure(w, View.MeasureSpec.makeMeasureSpec((resources.displayMetrics.heightPixels * 0.42).toInt(), View.MeasureSpec.AT_MOST))
             }
         }
         resultsBox = LinearLayout(this)
@@ -922,6 +923,7 @@ class MainActivity : Activity() {
         val lp = bottomBox.layoutParams as FrameLayout.LayoutParams
         val land = isLandscape()
         infoRow.setPadding(if (navigating) leftInset + dp(10) else 0, 0, 0, 0)
+        (infoRow.layoutParams as LinearLayout.LayoutParams).bottomMargin = if (navigating) dp(if (land) 40 else 64) else dp(8)
         if (navigating) {
             lp.setMargins(0, 0, 0, 0)
             navBand.setPadding(dp(12) + leftInset, dp(8), dp(12), dp(6))
@@ -1025,7 +1027,7 @@ class MainActivity : Activity() {
     private fun refreshPanel() {
         panel.visibility = if (route != null && !navigating) View.VISIBLE else View.GONE
         navBand.visibility = if (navigating) View.VISIBLE else View.GONE
-        infoRow.visibility = View.VISIBLE
+        infoRow.visibility = if (navigating) View.VISIBLE else View.GONE
         navDestV.text = destName.substringBefore(",")
         applyBottomMargins()
         modeRow.visibility = if (navigating) View.GONE else View.VISIBLE
@@ -1434,7 +1436,7 @@ class MainActivity : Activity() {
         val cp = m.cameraPosition
         val size = prefs.float("carSize", 1f)
         val is3d = !puck && carMode3d()
-        val scale = (if (puck) 0.6 * zoomFactor(cp.zoom) else (if (is3d) 0.5 else 0.4) * size * zoomFactor(cp.zoom)).toFloat()
+        val scale = (if (puck) 1.9 * zoomFactor(cp.zoom) else (if (is3d) 0.5 else 0.4) * size * zoomFactor(cp.zoom)).toFloat()
         val w = bmp.width
         val h = bmp.height
         if (carView.layoutParams.width != w || carView.layoutParams.height != h) {
@@ -1909,7 +1911,7 @@ class MainActivity : Activity() {
         val ref = refs.firstOrNull()?.let { it.replace(Regex("^([A-Z]+)(\\d)"), "$1 $2") } ?: ""
         if (name.isNotBlank() && ref.isNotBlank() && norm(name) == norm(ref)) name = ""
         val txt = listOf(ref, name).filter { it.isNotBlank() }.joinToString(" · ")
-        val show = txt.isNotBlank() && prefs.bool("showRoadName", true) && menuView == null
+        val show = txt.isNotBlank() && prefs.bool("showRoadName", true) && menuView == null && !searchBox.hasFocus()
         if (txt != carName.text.toString()) {
             carName.text = txt
             val (bg, fg) = when (ref.firstOrNull()) {
