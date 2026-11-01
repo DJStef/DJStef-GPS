@@ -77,7 +77,7 @@ import kotlin.math.roundToInt
 class MainActivity : Activity() {
 
     companion object {
-        const val VERSION = "0.75"
+        const val VERSION = "1.0"
         private val EURO_RE = Regex("^E\\s?\\d{1,3}$")
         private val SIGN_REF_RE = Regex("^([A-Z]{1,2}\\s?\\d{1,4}[A-Za-z]?)\\s*[·:-]\\s*(.*)$")
         private val VERS_RE = Regex("\\s+vers\\s+(.+)$")
@@ -119,6 +119,7 @@ class MainActivity : Activity() {
     private lateinit var exitTop: TextView
     private lateinit var exitDest: TextView
     private lateinit var exitNumV: TextView
+    private lateinit var exitRefV: TextView
     private lateinit var exitArrowV: TextView
     private lateinit var sideMore: LinearLayout
     private lateinit var moreBtn: TextView
@@ -364,6 +365,8 @@ class MainActivity : Activity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        demo = false
+        rootLayout.removeCallbacks(demoTick)
         scope.cancel()
         try { locMgr.removeUpdates(locListener) } catch (e: Exception) { }
         tts?.shutdown()
@@ -489,7 +492,7 @@ class MainActivity : Activity() {
         carName.setTypeface(null, Typeface.BOLD)
         carName.maxLines = 1
         carName.ellipsize = android.text.TextUtils.TruncateAt.END
-        carName.maxWidth = (resources.displayMetrics.widthPixels * 0.7).toInt()
+        carName.maxWidth = (resources.displayMetrics.widthPixels * 0.82).toInt()
         carName.setPadding(dp(16), dp(6), dp(16), dp(6))
         carName.background = colorBg("#26324F", 16)
         carName.visibility = View.GONE
@@ -567,7 +570,7 @@ class MainActivity : Activity() {
         navToward.ellipsize = android.text.TextUtils.TruncateAt.END
         navToward.visibility = View.GONE
         navStreet = label("", 14f, false, "#E8F5E9")
-        navStreet.maxLines = 2
+        navStreet.maxLines = 3
         navStreet.ellipsize = android.text.TextUtils.TruncateAt.END
         navRoad = TextView(this)
         navRoad.visibility = View.GONE
@@ -609,7 +612,18 @@ class MainActivity : Activity() {
         exitDest = label("", 21f, true, "#FFFFFF")
         exitDest.maxLines = 2
         exitDest.ellipsize = android.text.TextUtils.TruncateAt.END
-        exitCol.addView(exitTop)
+        exitRefV = TextView(this)
+        exitRefV.setTextColor(Color.WHITE)
+        exitRefV.textSize = 15f
+        exitRefV.typeface = CONDENSED
+        exitRefV.setPadding(dp(8), dp(1), dp(8), dp(1))
+        exitRefV.visibility = View.GONE
+        val exitTopRow = LinearLayout(this)
+        exitTopRow.orientation = LinearLayout.HORIZONTAL
+        exitTopRow.gravity = Gravity.CENTER_VERTICAL
+        exitTopRow.addView(exitRefV, LinearLayout.LayoutParams(-2, -2).also { it.rightMargin = dp(8) })
+        exitTopRow.addView(exitTop)
+        exitCol.addView(exitTopRow)
         exitCol.addView(exitDest)
         exitArrowV = label("↗", 34f, true, "#FFFFFF")
         exitSign.addView(exitNumV, LinearLayout.LayoutParams(-2, -2).also { it.rightMargin = dp(10) })
@@ -718,7 +732,7 @@ class MainActivity : Activity() {
         etaView = label("", 22f, true)
         subView = label("", 15f, false, "#C0C7D6")
         destView = label("", 14f, false, "#9AA3B5")
-        destView.maxLines = 1
+        destView.maxLines = 2
         panel.addView(etaView)
         panel.addView(subView)
         panel.addView(destView)
@@ -2521,8 +2535,13 @@ class MainActivity : Activity() {
         }
         altRow.visibility = View.VISIBLE
         for ((i, r) in alts.withIndex()) {
-            val b = button("${i + 1} · ${(r.dur / 60).roundToInt()} min · ${String.format(Locale.FRANCE, "%.0f", r.dist / 1000)} km", GREY) { selectAlt(i) }
-            b.textSize = 12f
+            val mins = (r.dur / 60).roundToInt()
+            val dur = if (mins >= 60) "${mins / 60} h ${String.format(Locale.FRANCE, "%02d", mins % 60)}" else "$mins min"
+            val b = button("${i + 1} · $dur\n${String.format(Locale.FRANCE, "%.0f", r.dist / 1000)} km", GREY) { selectAlt(i) }
+            b.textSize = 13f
+            b.isSingleLine = false
+            b.maxLines = 2
+            b.setPadding(dp(4), dp(8), dp(4), dp(8))
             b.background = glossBtn(if (i == altIdx) ORANGE_L else GREY)
             b.setTextColor(Color.parseColor(if (i == altIdx) "#0B1220" else "#FFFFFF"))
             altRow.addView(b, LinearLayout.LayoutParams(0, -2, 1f).also { it.rightMargin = dp(6) })
@@ -2813,7 +2832,15 @@ class MainActivity : Activity() {
         val exitTo = towardTxt.removePrefix("vers ").trim().ifBlank { next.name }
         val isExit = next.kind in 17..21 || (next.kind in 22..24 && next.sign.isNotBlank())
         if (isExit && (exitNum != null || exitTo.isNotBlank()) && dNext < 6000) {
-            exitTop.text = (allRefs.firstOrNull()?.let { "$it  ·  " } ?: "") + "SORTIE"
+            exitTop.text = "SORTIE"
+            val xr = allRefs.firstOrNull()
+            if (xr != null) {
+                exitRefV.text = xr
+                val xc = when (xr[0]) { 'E' -> "#2E7D32"; 'D' -> "#F9A825"; else -> "#D32F2F" }
+                exitRefV.setTextColor(Color.parseColor(if (xr[0] == 'D') "#1A1A1A" else "#FFFFFF"))
+                exitRefV.background = GradientDrawable().also { it.setColor(Color.parseColor(xc)); it.cornerRadius = dp(5).toFloat() }
+                exitRefV.visibility = View.VISIBLE
+            } else exitRefV.visibility = View.GONE
             exitNumV.text = exitNum ?: ""
             exitNumV.visibility = if (exitNum != null) View.VISIBLE else View.GONE
             exitDest.text = exitTo
