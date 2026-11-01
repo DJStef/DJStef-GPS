@@ -27,38 +27,20 @@ object Gloss {
         return Color.HSVToColor(hsv)
     }
 
-    /** Rectangle arrondi bombé : dégradé vertical + reflet sur la moitié haute + liseré clair. */
-    fun rect(color: Int, radiusPx: Float, glossHeightPx: Int): LayerDrawable {
-        val base = GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, intArrayOf(shade(color, 1.25f), color, shade(color, 0.62f)))
+    /** Rectangle arrondi : léger dégradé vertical et liseré fin, sans reflet. */
+    fun rect(color: Int, radiusPx: Float, glossHeightPx: Int): GradientDrawable {
+        val base = GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, intArrayOf(shade(color, 1.12f), shade(color, 0.86f)))
         base.cornerRadius = radiusPx
-        base.setStroke(2, shade(color, 1.5f) and 0x88FFFFFF.toInt() or 0x44000000)
-        val hi = GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, intArrayOf(0x66FFFFFF, 0x00FFFFFF))
-        hi.cornerRadii = floatArrayOf(radiusPx, radiusPx, radiusPx, radiusPx, 0f, 0f, 0f, 0f)
-        val ld = LayerDrawable(arrayOf(base, hi))
-        ld.setLayerInset(1, 3, 3, 3, 0)
-        ld.setLayerHeight(1, glossHeightPx)
-        ld.setLayerGravity(1, android.view.Gravity.TOP)
-        return ld
+        base.setStroke(2, 0x33FFFFFF)
+        return base
     }
 
-    /** Pastille ronde bombée avec reflet. */
-    fun oval(color: Int): LayerDrawable {
-        val base = GradientDrawable()
+    /** Pastille ronde : léger dégradé vertical et liseré fin, sans reflet. */
+    fun oval(color: Int): GradientDrawable {
+        val base = GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, intArrayOf(shade(color, 1.18f), shade(color, 0.82f)))
         base.shape = GradientDrawable.OVAL
-        base.gradientType = GradientDrawable.RADIAL_GRADIENT
-        base.gradientRadius = 220f
-        base.setGradientCenter(0.35f, 0.3f)
-        base.colors = intArrayOf(shade(color, 1.6f), color, shade(color, 0.55f))
-        base.setStroke(2, 0x55FFFFFF)
-        val hi = GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, intArrayOf(0x77FFFFFF, 0x00FFFFFF))
-        hi.shape = GradientDrawable.OVAL
-        val ld = LayerDrawable(arrayOf(base, hi))
-        ld.setLayerInsetLeft(1, 10)
-        ld.setLayerInsetRight(1, 10)
-        ld.setLayerInsetTop(1, 4)
-        ld.setLayerHeight(1, 26)
-        ld.setLayerGravity(1, android.view.Gravity.TOP)
-        return ld
+        base.setStroke(2, 0x33FFFFFF)
+        return base
     }
 }
 

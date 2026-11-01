@@ -77,7 +77,7 @@ import kotlin.math.roundToInt
 class MainActivity : Activity() {
 
     companion object {
-        const val VERSION = "1.0"
+        const val VERSION = "1.1"
         private val EURO_RE = Regex("^E\\s?\\d{1,3}$")
         private val SIGN_REF_RE = Regex("^([A-Z]{1,2}\\s?\\d{1,4}[A-Za-z]?)\\s*[·:-]\\s*(.*)$")
         private val VERS_RE = Regex("\\s+vers\\s+(.+)$")
@@ -114,7 +114,6 @@ class MainActivity : Activity() {
     private lateinit var searchBox: EditText
     private lateinit var resultsBox: LinearLayout
     private var sideBox: View? = null
-    private lateinit var stopSideBtn: TextView
     private lateinit var exitSign: LinearLayout
     private lateinit var exitTop: TextView
     private lateinit var exitDest: TextView
@@ -671,7 +670,7 @@ class MainActivity : Activity() {
         val setBtn = circleBtn("⚙", 44) { closeSide(); showMenu(null) }
         sideBtns = listOf(recBtn, repBtn, trafficBtn, zin, zout, muteBtn, viewBtn, setBtn, moreBtn)
         for (b in sideBtns) {
-            b.alpha = 0.82f
+            b.alpha = 1f
             (b.layoutParams as LinearLayout.LayoutParams).topMargin = dp(8)
             if (b !== moreBtn) {
                 sideMore.addView(b)
@@ -687,13 +686,6 @@ class MainActivity : Activity() {
         demoSpeedBtn.visibility = View.GONE
         side.addView(demoSpeedBtn)
         (demoSpeedBtn.layoutParams as LinearLayout.LayoutParams).topMargin = dp(10)
-        stopSideBtn = circleBtn("✕", 56) { stopNavigation() }
-        stopSideBtn.background = GradientDrawable().also { it.shape = GradientDrawable.OVAL; it.setColor(Color.parseColor(RED)) }
-        stopSideBtn.alpha = 1f
-        stopSideBtn.textSize = 26f
-        stopSideBtn.visibility = View.GONE
-        side.addView(stopSideBtn)
-        (stopSideBtn.layoutParams as LinearLayout.LayoutParams).topMargin = dp(10)
         side.addView(moreBtn)
         muteBtn.visibility = View.GONE
         viewBtn.visibility = View.GONE
@@ -806,11 +798,11 @@ class MainActivity : Activity() {
             it.cornerRadii = floatArrayOf(dp(22).toFloat(), dp(22).toFloat(), dp(22).toFloat(), dp(22).toFloat(), 0f, 0f, 0f, 0f)
         }
         // Gauche : bouton ✕ pour arrêter ; centre : durée, distance · arrivée, destination
-        val navStop = circleBtn("✕", 48) { stopNavigation() }
+        val navStop = circleBtn("✕", 60) { stopNavigation() }
         navStop.background = GradientDrawable().also { it.shape = GradientDrawable.OVAL; it.setColor(Color.parseColor(RED)) }
         navStop.elevation = 0f
         navStop.alpha = 1f
-        navStop.textSize = 22f
+        navStop.textSize = 26f
         navEta = label("", 28f, true, "#81C784").also { it.typeface = CONDENSED }
         navEta.gravity = Gravity.CENTER
         navSub = label("", 19f, true, "#E0E6F2").also { it.typeface = CONDENSED }
@@ -851,6 +843,7 @@ class MainActivity : Activity() {
         val botRow = LinearLayout(this)
         botRow.orientation = LinearLayout.HORIZONTAL
         botRow.gravity = Gravity.CENTER_VERTICAL
+        botRow.addView(navStop)
         botRow.addView(navDestV, LinearLayout.LayoutParams(0, -2, 1f).also { it.leftMargin = dp(10); it.rightMargin = dp(10) })
         botRow.addView(altBtn)
         navBand.addView(botRow, LinearLayout.LayoutParams(-1, -2).also { it.topMargin = dp(8); it.bottomMargin = dp(6) })
@@ -1195,7 +1188,6 @@ class MainActivity : Activity() {
         searchRow.visibility = if (navigating) View.GONE else View.VISIBLE
         navBanner.visibility = if (navigating) View.VISIBLE else View.GONE
         if (!navigating) exitSign.visibility = View.GONE
-        stopSideBtn.visibility = if (navigating) View.VISIBLE else View.GONE
         muteBtn.visibility = if (navigating) View.VISIBLE else View.GONE
         zoomInBtn?.visibility = if (navigating) View.VISIBLE else View.GONE
         zoomOutBtn?.visibility = if (navigating) View.VISIBLE else View.GONE
