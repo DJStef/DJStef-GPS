@@ -77,7 +77,7 @@ import kotlin.math.roundToInt
 class MainActivity : Activity() {
 
     companion object {
-        const val VERSION = "0.72"
+        const val VERSION = "0.73"
         private val EURO_RE = Regex("^E\\s?\\d{1,3}$")
         private val SIGN_REF_RE = Regex("^([A-Z]{1,2}\\s?\\d{1,4}[A-Za-z]?)\\s*[·:-]\\s*(.*)$")
         private val VERS_RE = Regex("\\s+vers\\s+(.+)$")
@@ -205,6 +205,8 @@ class MainActivity : Activity() {
         demoPos = 0.0
         demoSpeedBtn.text = "×1"
         lastLimitPt = null
+        smInit = false
+        snapIdx = 0
         if (!navigating) startNavigation()
         refreshPanel()
         rootLayout.removeCallbacks(demoTick)
@@ -236,6 +238,9 @@ class MainActivity : Activity() {
     private lateinit var navDestV: TextView
     private val vias = ArrayList<Place>()
     private var pendingVia = false
+    private var pendingStart = false
+    private var customStart: Place? = null
+    private lateinit var fromBtn: TextView
     private var alts: List<Route> = emptyList()
     private var altIdx = 0
     private lateinit var altRow: LinearLayout
@@ -681,7 +686,15 @@ class MainActivity : Activity() {
 
         val actions = LinearLayout(this)
         actions.orientation = LinearLayout.HORIZONTAL
-        startBtn = button("Démarrer", GREEN) { if (navigating) stopNavigation() else startNavigation() }
+        startBtn = button("Démarrer", GREEN) {
+            if (navigating) stopNavigation()
+            else if (customStart != null) {
+                customStart = null
+                autoStart = true
+                toast("Départ remis sur ta position")
+                computeRoute(false)
+            } else startNavigation()
+        }
         cancelBtn = button("Annuler", RED) { clearRoute() }
         actions.addView(startBtn, LinearLayout.LayoutParams(0, -2, 2f).also { it.rightMargin = dp(6) })
         actions.addView(cancelBtn, LinearLayout.LayoutParams(0, -2, 1f))
@@ -689,6 +702,12 @@ class MainActivity : Activity() {
         demoBtn = button("▶ Démo : simuler le trajet", BLUE) { startDemo() }
         demoBtn.textSize = 14f
         panel.addView(demoBtn, LinearLayout.LayoutParams(-1, -2).also { it.topMargin = dp(8) })
+        fromBtn = button("📍 Départ : ma position", GREY) { pickStart() }
+        fromBtn.textSize = 14f
+        fromBtn.maxLines = 1
+        fromBtn.ellipsize = android.text.TextUtils.TruncateAt.END
+        fromBtn.setOnLongClickListener { customStart = null; toast("Départ : ta position"); computeRoute(false); true }
+        panel.addView(fromBtn, LinearLayout.LayoutParams(-1, -2).also { it.topMargin = dp(8) })
         val tools = LinearLayout(this)
         tools.orientation = LinearLayout.HORIZONTAL
         viaBtn = button("＋ Étape", GREY) { addViaStart() }
@@ -1109,6 +1128,8 @@ class MainActivity : Activity() {
         viaBtn.visibility = if (navigating) View.GONE else View.VISIBLE
         startBtn.text = if (navigating) "Arrêter" else "Démarrer"
         demoBtn.visibility = if (navigating) View.GONE else View.VISIBLE
+        fromBtn.visibility = if (navigating) View.GONE else View.VISIBLE
+        fromBtn.text = "📍 Départ : " + (customStart?.name?.substringBefore(",") ?: "ma position")
         demoSpeedBtn.visibility = if (navigating && demo) View.VISIBLE else View.GONE
         startBtn.background = glossBtn(if (navigating) RED else GREEN)
         trafficBtn.alpha = if (prefs.bool("traffic", false)) 1f else 0.55f
@@ -2121,7 +2142,29 @@ class MainActivity : Activity() {
         } catch (_: Exception) { null }
     }
 
+    private fun pickStart() {
+        if (dest == null || navigating) return
+        pendingStart = true
+        pendingVia = false
+        searchBox.hint = "Départ : d'où partir ?"
+        searchBox.setText("")
+        searchBox.requestFocus()
+        fillSuggestions()
+        toast("Choisis le départ (appui long sur le bouton = ta position)")
+    }
+
     private fun goTo(p: Place) {
+        if (pendingStart) {
+            pendingStart = false
+            searchBox.hint = "Où allez-vous ?"
+            searchBox.setText(destName)
+            setResults(false)
+            hideKeyboard()
+            searchBox.clearFocus()
+            customStart = p
+            computeRoute(false)
+            return
+        }
         if (pendingVia) {
             pendingVia = false
             searchBox.hint = "Où allez-vous ?"
@@ -2306,13 +2349,14 @@ class MainActivity : Activity() {
     private fun computeRoute(keepNav: Boolean) {
         val d = dest ?: return
         val l = me
-        if (l == null) {
+        val cs = if (keepNav) null else customStart
+        if (l == null && cs == null) {
             toast("Position GPS en attente...")
             return
         }
         scope.launch {
             try {
-                val from = Pt(l.latitude, l.longitude)
+                val from = cs?.pt ?: Pt(l!!.latitude, l.longitude)
                 val opts = routeOpts()
                 val viaList = vias.map { Via(it.pt, true) }
                 var list = Router.routes(mode, from, d, opts, emptyList(), viaList, if (mode == "car" && viaList.isEmpty() && !keepNav) 2 else 0)
@@ -2495,6 +2539,8 @@ class MainActivity : Activity() {
         vias.clear()
         alts = emptyList()
         pendingVia = false
+        pendingStart = false
+        customStart = null
         style?.getSourceAs<GeoJsonSource>("route")?.setGeoJson(FeatureCollection.fromFeatures(emptyList<Feature>()))
         style?.getSourceAs<GeoJsonSource>("dest")?.setGeoJson(FeatureCollection.fromFeatures(emptyList<Feature>()))
         refreshPanel()
