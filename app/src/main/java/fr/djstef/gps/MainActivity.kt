@@ -77,7 +77,7 @@ import kotlin.math.roundToInt
 class MainActivity : Activity() {
 
     companion object {
-        const val VERSION = "0.69"
+        const val VERSION = "0.70"
         private val EURO_RE = Regex("^E\\s?\\d{1,3}$")
         private val SIGN_REF_RE = Regex("^([A-Z]{1,2}\\s?\\d{1,4}[A-Za-z]?)\\s*[·:-]\\s*(.*)$")
         private val VERS_RE = Regex("\\s+vers\\s+(.+)$")
@@ -428,6 +428,7 @@ class MainActivity : Activity() {
             m.cameraPosition = CameraPosition.Builder().target(LatLng(46.6, 2.5)).zoom(5.0).build()
             m.uiSettings.isCompassEnabled = false
             m.uiSettings.isLogoEnabled = false
+            m.uiSettings.isAttributionEnabled = false
             styleNight = wantNight()
             m.setStyle(Style.Builder().fromUri(if (styleNight) STYLE_DARK else STYLE_URL)) { st -> onStyleReady(m, st) }
         }
@@ -3843,7 +3844,7 @@ class MainActivity : Activity() {
     private fun aboutPage(content: LinearLayout) {
         val c = card(content)
         c.addView(label("DJSTEF GPS · v$VERSION", 18f, true))
-        c.addView(label("Carte : OpenStreetMap et OpenFreeMap\nItinéraires : Valhalla / OSRM (OpenStreetMap)\nRadars fixes : data.gouv.fr (Licence Ouverte 2.0)\nTrafic : TomTom\nCarburants : data.economie.gouv.fr (Licence Ouverte)\nRadars : Lufop.net et contributeurs OpenStreetMap (ODbL 1.0), lufop.net\nParkings : OpenStreetMap (ODbL)\nVoiture « Concept 3D » : Concept Car © Eric Chadwick / Khronos, CC BY 4.0, base Unity Fan (CC0)\nLimitations de vitesse : OpenStreetMap (Overpass)\nAdresses : Nominatim\nSatellite : Esri World Imagery\nHeure d'arrivée avec trafic : TomTom\nRecherche : Photon (Komoot), Nominatim, annuaire des entreprises et Base Adresse Nationale (data.gouv.fr), TomTom (clé du trafic), Google Places (si clé)", 13f, false, "#C0C7D6"))
+        c.addView(label("Carte : © OpenFreeMap © OpenMapTiles, données © contributeurs OpenStreetMap (ODbL)\nItinéraires : Valhalla / OSRM (OpenStreetMap)\nRadars fixes : data.gouv.fr (Licence Ouverte 2.0)\nTrafic : TomTom\nCarburants : data.economie.gouv.fr (Licence Ouverte)\nRadars : Lufop.net et contributeurs OpenStreetMap (ODbL 1.0), lufop.net\nParkings : OpenStreetMap (ODbL)\nVoiture « Concept 3D » : Concept Car © Eric Chadwick / Khronos, CC BY 4.0, base Unity Fan (CC0)\nLimitations de vitesse : OpenStreetMap (Overpass)\nAdresses : Nominatim\nSatellite : Esri World Imagery\nHeure d'arrivée avec trafic : TomTom\nRecherche : Photon (Komoot), Nominatim, annuaire des entreprises et Base Adresse Nationale (data.gouv.fr), TomTom (clé du trafic), Google Places (si clé)", 13f, false, "#C0C7D6"))
         val cb = card(content)
         sectionTitle(cb, "SAUVEGARDE DES RÉGLAGES", "#90A4AE")
         cb.addView(label("Copie tes réglages (clés API, voiture, favoris…) dans le presse-papiers, ou restaure-les après une réinstallation.", 12f, false, "#9AA3B5"))
