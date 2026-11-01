@@ -140,13 +140,13 @@ class SpeedBubble(ctx: Context) : View(ctx) {
         if (s <= 0f) return
         val cx = width / 2f
         val cy = height / 2f
-        val r = s / 2f - dpToPx(context, 4f)
+        val r = s / 2f - dpToPx(context, 6f)
 
         p.style = Paint.Style.FILL
         p.shader = null
         p.color = 0x99000000.toInt()
-        p.maskFilter = android.graphics.BlurMaskFilter(dpToPx(context, 5f), android.graphics.BlurMaskFilter.Blur.NORMAL)
-        c.drawCircle(cx + dpToPx(context, 1.5f), cy + dpToPx(context, 3f), r, p)
+        p.maskFilter = android.graphics.BlurMaskFilter(dpToPx(context, 3f), android.graphics.BlurMaskFilter.Blur.NORMAL)
+        c.drawCircle(cx + dpToPx(context, 1f), cy + dpToPx(context, 2f), r, p)
         p.maskFilter = null
 
         // Anneau chromé
@@ -294,5 +294,26 @@ class ManeuverView(ctx: Context) : View(ctx) {
             }
         }
         c.restore()
+    }
+}
+
+
+/** Croix blanche parfaitement centrée (dessinée, sans dépendre d'une police). */
+class CrossView(ctx: Context) : View(ctx) {
+    private val p = Paint(Paint.ANTI_ALIAS_FLAG).also {
+        it.color = Color.WHITE
+        it.style = Paint.Style.STROKE
+        it.strokeCap = Paint.Cap.ROUND
+    }
+
+    override fun onDraw(c: Canvas) {
+        val s = min(width, height).toFloat()
+        if (s <= 0f) return
+        val cx = width / 2f
+        val cy = height / 2f
+        val h = s * 0.19f
+        p.strokeWidth = s * 0.1f
+        c.drawLine(cx - h, cy - h, cx + h, cy + h, p)
+        c.drawLine(cx - h, cy + h, cx + h, cy - h, p)
     }
 }

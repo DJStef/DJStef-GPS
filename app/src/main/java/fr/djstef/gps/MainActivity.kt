@@ -77,7 +77,7 @@ import kotlin.math.roundToInt
 class MainActivity : Activity() {
 
     companion object {
-        const val VERSION = "1.1"
+        const val VERSION = "1.2"
         private val EURO_RE = Regex("^E\\s?\\d{1,3}$")
         private val SIGN_REF_RE = Regex("^([A-Z]{1,2}\\s?\\d{1,4}[A-Za-z]?)\\s*[·:-]\\s*(.*)$")
         private val VERS_RE = Regex("\\s+vers\\s+(.+)$")
@@ -434,6 +434,7 @@ class MainActivity : Activity() {
     private fun circleBtn(text: String, size: Int, onClick: () -> Unit): TextView {
         val t = label(text, 20f, true)
         t.gravity = Gravity.CENTER
+        t.includeFontPadding = false
         t.background = Gloss.oval(Color.parseColor("#26324F"))
         t.elevation = dp(6).toFloat()
         t.layoutParams = LinearLayout.LayoutParams(dp(size), dp(size))
@@ -798,11 +799,10 @@ class MainActivity : Activity() {
             it.cornerRadii = floatArrayOf(dp(22).toFloat(), dp(22).toFloat(), dp(22).toFloat(), dp(22).toFloat(), 0f, 0f, 0f, 0f)
         }
         // Gauche : bouton ✕ pour arrêter ; centre : durée, distance · arrivée, destination
-        val navStop = circleBtn("✕", 60) { stopNavigation() }
+        val navStop = CrossView(this)
+        navStop.layoutParams = LinearLayout.LayoutParams(dp(48), dp(48))
         navStop.background = GradientDrawable().also { it.shape = GradientDrawable.OVAL; it.setColor(Color.parseColor(RED)) }
-        navStop.elevation = 0f
-        navStop.alpha = 1f
-        navStop.textSize = 26f
+        navStop.setOnClickListener { stopNavigation() }
         navEta = label("", 28f, true, "#81C784").also { it.typeface = CONDENSED }
         navEta.gravity = Gravity.CENTER
         navSub = label("", 19f, true, "#E0E6F2").also { it.typeface = CONDENSED }
@@ -911,7 +911,7 @@ class MainActivity : Activity() {
             land -> 0
             else -> bottomBox.height
         }
-        val want = base + bottomInset + dp(if (navigating && !land) 12 else 10)
+        val want = base + bottomInset + (if (navigating && !land) (dp(79) * uiF).roundToInt() else dp(10))
         if (lp.bottomMargin != want || lp.rightMargin != dp(10) + rightInset) {
             lp.bottomMargin = want
             lp.rightMargin = dp(10) + rightInset
