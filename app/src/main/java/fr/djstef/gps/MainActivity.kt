@@ -77,7 +77,7 @@ import kotlin.math.roundToInt
 class MainActivity : Activity() {
 
     companion object {
-        const val VERSION = "1.2"
+        const val VERSION = "1.3"
         private val EURO_RE = Regex("^E\\s?\\d{1,3}$")
         private val SIGN_REF_RE = Regex("^([A-Z]{1,2}\\s?\\d{1,4}[A-Za-z]?)\\s*[·:-]\\s*(.*)$")
         private val VERS_RE = Regex("\\s+vers\\s+(.+)$")
@@ -129,6 +129,7 @@ class MainActivity : Activity() {
         val v = if (show) View.INVISIBLE else View.VISIBLE
         if (::bottomBox.isInitialized) bottomBox.visibility = v
         sideBox?.visibility = v
+        updateRoadName()
     }
     private lateinit var navBanner: LinearLayout
     private lateinit var navArrow: ManeuverView
@@ -534,7 +535,7 @@ class MainActivity : Activity() {
         val micBtn = circleBtn("🎤", 48) { startVoice() }
         (micBtn.layoutParams as LinearLayout.LayoutParams).leftMargin = dp(8)
         searchRow.addView(micBtn)
-        val menuBtn = circleBtn("☰", 48) { showMenu(null) }
+        val menuBtn = circleBtn("⚙", 48) { showMenu(null) }
         (menuBtn.layoutParams as LinearLayout.LayoutParams).leftMargin = dp(8)
         searchRow.addView(menuBtn)
         topBox.addView(searchRow, LinearLayout.LayoutParams(-1, -2))
@@ -835,10 +836,9 @@ class MainActivity : Activity() {
         navDestV.setAutoSizeTextTypeUniformWithConfiguration(11, 16, 1, android.util.TypedValue.COMPLEX_UNIT_SP)
         // Ligne du haut : chiffres écartés aux extrémités ; ligne du bas : ✕ · destination · itinéraires alternatifs
         navBand.addView(kmRow, LinearLayout.LayoutParams(-1, -2).also { it.topMargin = dp(4) })
-        val altBtn = circleBtn("⇄", 48) { alternativesDialog() }
-        altBtn.elevation = 0f
-        altBtn.alpha = 1f
-        altBtn.textSize = 22f
+        val altBtn = SwapView(this)
+        altBtn.layoutParams = LinearLayout.LayoutParams(dp(48), dp(48))
+        altBtn.setOnClickListener { alternativesDialog() }
         altBtn.background = GradientDrawable().also { it.shape = GradientDrawable.OVAL; it.setColor(Color.parseColor("#33405F")) }
         val botRow = LinearLayout(this)
         botRow.orientation = LinearLayout.HORIZONTAL
@@ -911,7 +911,7 @@ class MainActivity : Activity() {
             land -> 0
             else -> bottomBox.height
         }
-        val want = base + bottomInset + (if (navigating && !land) (dp(79) * uiF).roundToInt() else dp(10))
+        val want = base + bottomInset + (if (navigating && !land) (dp(79) * uiF).roundToInt() else if (land) dp(10) else dp(56))
         if (lp.bottomMargin != want || lp.rightMargin != dp(10) + rightInset) {
             lp.bottomMargin = want
             lp.rightMargin = dp(10) + rightInset
@@ -2062,7 +2062,7 @@ class MainActivity : Activity() {
         val ref = refs.firstOrNull()?.let { it.replace(Regex("^([A-Z]+)(\\d)"), "$1 $2") } ?: ""
         if (name.isNotBlank() && ref.isNotBlank() && norm(name) == norm(ref)) name = ""
         val txt = listOf(ref, name).filter { it.isNotBlank() }.joinToString(" · ")
-        val show = txt.isNotBlank() && prefs.bool("showRoadName", true) && menuView == null && !searchBox.hasFocus()
+        val show = txt.isNotBlank() && prefs.bool("showRoadName", true) && menuView == null && !searchBox.hasFocus() && resultsBox.visibility != View.VISIBLE
         if (txt != carName.text.toString()) {
             carName.text = txt
             val (bg, fg) = when (ref.firstOrNull()) {

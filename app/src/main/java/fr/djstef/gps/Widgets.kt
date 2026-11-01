@@ -317,3 +317,32 @@ class CrossView(ctx: Context) : View(ctx) {
         c.drawLine(cx - h, cy + h, cx + h, cy - h, p)
     }
 }
+
+/** Deux flèches opposées (⇄) parfaitement centrées. */
+class SwapView(ctx: Context) : View(ctx) {
+    private val p = Paint(Paint.ANTI_ALIAS_FLAG).also {
+        it.color = Color.WHITE
+        it.style = Paint.Style.STROKE
+        it.strokeCap = Paint.Cap.ROUND
+        it.strokeJoin = Paint.Join.ROUND
+    }
+
+    override fun onDraw(c: Canvas) {
+        val s = min(width, height).toFloat()
+        if (s <= 0f) return
+        val cx = width / 2f
+        val cy = height / 2f
+        val w = s * 0.2f
+        val g = s * 0.085f
+        val hh = s * 0.075f
+        p.strokeWidth = s * 0.065f
+        val y1 = cy - g
+        c.drawLine(cx - w, y1, cx + w, y1, p)
+        c.drawLine(cx + w, y1, cx + w - hh, y1 - hh, p)
+        c.drawLine(cx + w, y1, cx + w - hh, y1 + hh, p)
+        val y2 = cy + g
+        c.drawLine(cx + w, y2, cx - w, y2, p)
+        c.drawLine(cx - w, y2, cx - w + hh, y2 - hh, p)
+        c.drawLine(cx - w, y2, cx - w + hh, y2 + hh, p)
+    }
+}
