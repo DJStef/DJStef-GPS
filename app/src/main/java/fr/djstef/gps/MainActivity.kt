@@ -77,7 +77,7 @@ import kotlin.math.roundToInt
 class MainActivity : Activity() {
 
     companion object {
-        const val VERSION = "0.73"
+        const val VERSION = "0.74"
         private val EURO_RE = Regex("^E\\s?\\d{1,3}$")
         private val SIGN_REF_RE = Regex("^([A-Z]{1,2}\\s?\\d{1,4}[A-Za-z]?)\\s*[·:-]\\s*(.*)$")
         private val VERS_RE = Regex("\\s+vers\\s+(.+)$")
@@ -114,6 +114,10 @@ class MainActivity : Activity() {
     private lateinit var searchBox: EditText
     private lateinit var resultsBox: LinearLayout
     private var sideBox: View? = null
+    private lateinit var stopSideBtn: TextView
+    private lateinit var exitSign: LinearLayout
+    private lateinit var exitTop: TextView
+    private lateinit var exitDest: TextView
     private lateinit var sideMore: LinearLayout
     private lateinit var moreBtn: TextView
 
@@ -177,7 +181,7 @@ class MainActivity : Activity() {
             val c = routeCum ?: return
             val total = c[c.size - 1]
             val base = (r.dist / r.dur.coerceAtLeast(1.0)).coerceIn(8.0, 30.0)
-            demoPos = (demoPos + base * demoMult).coerceAtMost(total)
+            demoPos = (demoPos + base * demoMult * 0.25).coerceAtMost(total)
             var lo = 0
             var hi = c.size - 1
             while (hi - lo > 1) { val mid = (lo + hi) / 2; if (c[mid] <= demoPos) lo = mid else hi = mid }
@@ -194,7 +198,7 @@ class MainActivity : Activity() {
             loc.time = System.currentTimeMillis()
             onLocation(loc)
             if (demoPos >= total) { demo = false; refreshPanel(); return }
-            rootLayout.postDelayed(this, 1000L)
+            rootLayout.postDelayed(this, 250L)
         }
     }
 
@@ -577,6 +581,22 @@ class MainActivity : Activity() {
         navCol.addView(navStreet)
         navBanner.addView(navCol, LinearLayout.LayoutParams(0, -2, 1f).also { it.leftMargin = dp(8) })
         topBox.addView(navBanner, LinearLayout.LayoutParams(-1, -2))
+        // Panneau bleu de sortie d'autoroute
+        exitSign = LinearLayout(this)
+        exitSign.orientation = LinearLayout.VERTICAL
+        exitSign.background = GradientDrawable().also {
+            it.setColor(Color.parseColor("#0A4DA3")); it.cornerRadius = dp(10).toFloat(); it.setStroke(dp(3), Color.WHITE)
+        }
+        exitSign.setPadding(dp(14), dp(8), dp(14), dp(10))
+        exitSign.elevation = dp(6).toFloat()
+        exitSign.visibility = View.GONE
+        exitTop = label("", 15f, true, "#FFFFFF").also { it.typeface = CONDENSED }
+        exitDest = label("", 21f, true, "#FFFFFF")
+        exitDest.maxLines = 2
+        exitDest.ellipsize = android.text.TextUtils.TruncateAt.END
+        exitSign.addView(exitTop)
+        exitSign.addView(exitDest)
+        topBox.addView(exitSign, LinearLayout.LayoutParams(-1, -2).also { it.topMargin = dp(6) })
 
         radarBox = LinearLayout(this)
         radarBox.orientation = LinearLayout.HORIZONTAL
@@ -627,6 +647,13 @@ class MainActivity : Activity() {
             }
         }
         side.addView(sideMore)
+        stopSideBtn = circleBtn("✕", 56) { stopNavigation() }
+        stopSideBtn.background = GradientDrawable().also { it.shape = GradientDrawable.OVAL; it.setColor(Color.parseColor(RED)) }
+        stopSideBtn.alpha = 1f
+        stopSideBtn.textSize = 26f
+        stopSideBtn.visibility = View.GONE
+        side.addView(stopSideBtn)
+        (stopSideBtn.layoutParams as LinearLayout.LayoutParams).topMargin = dp(10)
         side.addView(moreBtn)
         muteBtn.visibility = View.GONE
         viewBtn.visibility = View.GONE
@@ -784,7 +811,6 @@ class MainActivity : Activity() {
         val botRow = LinearLayout(this)
         botRow.orientation = LinearLayout.HORIZONTAL
         botRow.gravity = Gravity.CENTER_VERTICAL
-        botRow.addView(navStop)
         botRow.addView(navDestV, LinearLayout.LayoutParams(0, -2, 1f).also { it.leftMargin = dp(10); it.rightMargin = dp(10) })
         demoSpeedBtn = circleBtn("×1", 48) { cycleDemoSpeed() }
         demoSpeedBtn.elevation = 0f
@@ -1135,6 +1161,8 @@ class MainActivity : Activity() {
         trafficBtn.alpha = if (prefs.bool("traffic", false)) 1f else 0.55f
         searchRow.visibility = if (navigating) View.GONE else View.VISIBLE
         navBanner.visibility = if (navigating) View.VISIBLE else View.GONE
+        if (!navigating) exitSign.visibility = View.GONE
+        stopSideBtn.visibility = if (navigating) View.VISIBLE else View.GONE
         muteBtn.visibility = if (navigating) View.VISIBLE else View.GONE
         zoomInBtn?.visibility = if (navigating) View.VISIBLE else View.GONE
         zoomOutBtn?.visibility = if (navigating) View.VISIBLE else View.GONE
@@ -2762,6 +2790,14 @@ class MainActivity : Activity() {
         navRoad2.visibility = View.GONE
         navStreet.text = instr
         styleRoad(navRoad, allRefs, 18f)
+        val exitNum = Regex("Sortie\\s+(\\S+)").find(next.sign)?.groupValues?.get(1)
+        val exitTo = towardTxt.removePrefix("vers ").trim().ifBlank { next.name }
+        if (next.kind in 17..24 && next.sign.isNotBlank() && (exitNum != null || exitTo.isNotBlank()) && dNext < 6000) {
+            exitTop.text = (allRefs.firstOrNull()?.let { "$it  ·  " } ?: "") + (exitNum?.let { "SORTIE $it" } ?: "SORTIE")
+            exitDest.text = exitTo
+            exitDest.visibility = if (exitTo.isBlank()) View.GONE else View.VISIBLE
+            exitSign.visibility = View.VISIBLE
+        } else exitSign.visibility = View.GONE
         roadView.visibility = View.GONE
         val nowMs = System.currentTimeMillis()
         if (nowMs - lastEtaFetch > 180000) { trafBase = remTime; dest?.let { fetchTrafficEta(p, it, false) } }
