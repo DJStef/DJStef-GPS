@@ -275,13 +275,15 @@ object TomTomEta {
             if (s0 < 0 || s1 >= pts.size || s1 < s0) continue
             val mag = o.optInt("magnitudeOfDelay", 0)
             val cat = o.optString("simpleCategory", "")
+            val delay = o.optInt("delayInSeconds", 0)
+            // On ne colore que les vrais ralentissements (retard notable) : pas les travaux sans effet ni les « autres » mineurs
             val color = when {
-                cat == "ROAD_CLOSURE" || mag >= 3 -> "#D32F2F"
-                cat == "JAM" || mag == 2 -> "#D32F2F"
-                mag == 1 || cat == "ROAD_WORK" || cat == "OTHER" -> "#FF9F1C"
+                cat == "ROAD_CLOSURE" -> "#D32F2F"
+                cat == "JAM" && (mag >= 3 || delay >= 240) -> "#D32F2F"
+                cat == "JAM" && mag >= 2 && delay >= 90 -> "#FF9F1C"
+                cat != "JAM" && delay >= 120 && mag >= 2 -> "#FF9F1C"
                 else -> null
             } ?: continue
-            if (cat == "ROAD_WORK" && mag == 0) continue
             secs.add(TrafSec(pts[s0], pts[s1], color))
         }
         Triple(sum.getDouble("travelTimeInSeconds"), sum.optDouble("trafficDelayInSeconds", 0.0), secs)

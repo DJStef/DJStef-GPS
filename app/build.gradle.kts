@@ -13,7 +13,7 @@ android {
         targetSdk = 34
         // Le numéro de build GitHub garantit que chaque APK s'installe par-dessus le précédent.
         versionCode = (System.getenv("GITHUB_RUN_NUMBER") ?: "1").toInt()
-        versionName = "1.5"
+        versionName = "1.6"
     }
 
     // La clé de signature est générée et conservée par le workflow GitHub (jamais dans le dépôt).

@@ -43,6 +43,14 @@ data class Incident(
             14 -> "#FF9F1C"
             else -> "#546E7A"
         }
+    /** Seuls les incidents qui gênent vraiment la circulation sont gardés (pas les travaux ou dangers sans retard). */
+    val relevant: Boolean
+        get() = when (cat) {
+            1, 7, 8 -> true
+            6 -> magnitude >= 2
+            14 -> magnitude >= 2 || delayS >= 60
+            else -> magnitude >= 2 && delayS >= 120
+        }
     /** Faut-il l'annoncer à voix haute quand il est sur la route ? */
     val speakable: Boolean get() = cat == 1 || cat == 7 || cat == 8 || cat == 14 || (cat == 6 && magnitude >= 2)
 }
@@ -87,6 +95,6 @@ object Incidents {
                 }
             }
             // On ignore les incidents « inconnus » sans description
-            out.filter { it.cat != 0 || it.desc.isNotBlank() }
+            out.filter { it.cat != 0 || it.desc.isNotBlank() }.filter { it.relevant }
         }
 }

@@ -54,6 +54,7 @@ import org.maplibre.android.maps.MapView
 import org.maplibre.android.maps.Style
 import org.maplibre.android.style.expressions.Expression
 import org.maplibre.android.style.layers.CircleLayer
+import org.maplibre.android.style.layers.FillExtrusionLayer
 import org.maplibre.android.style.layers.FillLayer
 import org.maplibre.android.style.layers.LineLayer
 import org.maplibre.android.style.layers.Property
@@ -77,7 +78,7 @@ import kotlin.math.roundToInt
 class MainActivity : Activity() {
 
     companion object {
-        const val VERSION = "1.4"
+        const val VERSION = "1.6"
         private val EURO_RE = Regex("^E\\s?\\d{1,3}$")
         private val SIGN_REF_RE = Regex("^([A-Z]{1,2}\\s?\\d{1,4}[A-Za-z]?)\\s*[·:-]\\s*(.*)$")
         private val VERS_RE = Regex("\\s+vers\\s+(.+)$")
@@ -358,7 +359,49 @@ class MainActivity : Activity() {
 
     override fun onStart() { super.onStart(); mapView.onStart() }
     override fun onResume() { super.onResume(); mapView.onResume(); startLocation() }
-    override fun onPause() { super.onPause(); mapView.onPause() }
+    override fun onPause() { super.onPause(); if (!pipEntering && !isInPictureInPictureMode) mapView.onPause() }
+
+    // --- Mode fenêtré (image dans l'image) : pendant un guidage, quitter l'appli la réduit en petite fenêtre ---
+    private var inPip = false
+    private var pipEntering = false
+
+    private fun pipParams(): android.app.PictureInPictureParams {
+        val b = android.app.PictureInPictureParams.Builder().setAspectRatio(android.util.Rational(3, 4))
+        if (android.os.Build.VERSION.SDK_INT >= 31) b.setAutoEnterEnabled(navigating)
+        return b.build()
+    }
+
+    private fun updatePipParams() {
+        try { setPictureInPictureParams(pipParams()) } catch (_: Exception) {}
+    }
+
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        if (navigating && menuView == null) {
+            pipEntering = true
+            try { enterPictureInPictureMode(pipParams()) } catch (_: Exception) { pipEntering = false }
+        }
+    }
+
+    override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: android.content.res.Configuration) {
+        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+        inPip = isInPictureInPictureMode
+        pipEntering = false
+        if (isInPictureInPictureMode) {
+            sideBox?.visibility = View.GONE
+            bottomBox.visibility = View.GONE
+            carName.visibility = View.GONE
+            exitSign.visibility = View.GONE
+        } else {
+            sideBox?.visibility = View.VISIBLE
+            bottomBox.visibility = View.VISIBLE
+            refreshPanel()
+            updateRoadName()
+            applyUiScale()
+            goFullscreen()
+        }
+        positionCar()
+    }
     override fun onStop() { super.onStop(); mapView.onStop() }
     override fun onLowMemory() { super.onLowMemory(); mapView.onLowMemory() }
     override fun onSaveInstanceState(outState: Bundle) { super.onSaveInstanceState(outState); mapView.onSaveInstanceState(outState) }
@@ -826,9 +869,9 @@ class MainActivity : Activity() {
         fit(navSub, 11, 19, 1)
         fit(navEta, 16, 28, 1)
         fit(navArr, 11, 19, 1)
-        navSub.gravity = Gravity.CENTER_VERTICAL or Gravity.START
+        navSub.gravity = Gravity.CENTER
         navEta.gravity = Gravity.CENTER
-        navArr.gravity = Gravity.CENTER_VERTICAL or Gravity.END
+        navArr.gravity = Gravity.CENTER
         kmRow.addView(navSub, LinearLayout.LayoutParams(0, dp(44), 1f))
         kmRow.addView(navEta, LinearLayout.LayoutParams(0, dp(48), 1.5f))
         kmRow.addView(navArr, LinearLayout.LayoutParams(0, dp(44), 1f))
@@ -838,7 +881,7 @@ class MainActivity : Activity() {
         navDestV.ellipsize = android.text.TextUtils.TruncateAt.END
         navDestV.setAutoSizeTextTypeUniformWithConfiguration(11, 16, 1, android.util.TypedValue.COMPLEX_UNIT_SP)
         // Ligne du haut : chiffres écartés aux extrémités ; ligne du bas : ✕ · destination · itinéraires alternatifs
-        navBand.addView(kmRow, LinearLayout.LayoutParams(-1, -2).also { it.topMargin = dp(4) })
+        navBand.addView(kmRow, LinearLayout.LayoutParams(-1, -2).also { it.topMargin = dp(4); it.leftMargin = dp(16); it.rightMargin = dp(16) })
         val altBtn = SwapView(this)
         altBtn.layoutParams = LinearLayout.LayoutParams(dp(48), dp(48))
         altBtn.setOnClickListener { alternativesDialog() }
@@ -1264,8 +1307,20 @@ class MainActivity : Activity() {
         }
     }
 
+    private var b3dOn = true
+    /** Les immeubles en 3D coûtent cher à dessiner : on les coupe quand on roule vite (route dégagée). */
+    private fun buildings3d(show: Boolean) {
+        if (show == b3dOn) return
+        val st = style ?: return
+        b3dOn = show
+        try {
+            for (l in st.layers) if (l is FillExtrusionLayer) l.setProperties(PropertyFactory.visibility(if (show) Property.VISIBLE else Property.NONE))
+        } catch (_: Exception) {}
+    }
+
     private fun onStyleReady(m: MapLibreMap, st: Style) {
         style = st
+        b3dOn = true
         // Pas de fondu des symboles (la voiture clignotait à chaque mise à jour de position)
         st.transition = org.maplibre.android.style.layers.TransitionOptions(0, 0, false)
         widenRoads(st)
@@ -1276,7 +1331,7 @@ class MainActivity : Activity() {
         st.addLayer(
             LineLayer("route-casing", "route").withProperties(
                 PropertyFactory.lineColor("#FFFFFF"),
-                PropertyFactory.lineWidth(Expression.interpolate(Expression.exponential(1.6f), Expression.zoom(), Expression.stop(8, 6f), Expression.stop(12, 8f), Expression.stop(15, 12f), Expression.stop(17, 20f), Expression.stop(19, 34f))),
+                PropertyFactory.lineWidth(Expression.interpolate(Expression.exponential(1.6f), Expression.zoom(), Expression.stop(8, 8f), Expression.stop(12, 12f), Expression.stop(15, 19f), Expression.stop(17, 32f), Expression.stop(19, 52f))),
                 PropertyFactory.lineCap(Property.LINE_CAP_ROUND),
                 PropertyFactory.lineJoin(Property.LINE_JOIN_ROUND)
             )
@@ -1300,7 +1355,7 @@ class MainActivity : Activity() {
         st.addLayer(
             LineLayer("route-layer", "route").withProperties(
                 PropertyFactory.lineColor(Expression.get("c")),
-                PropertyFactory.lineWidth(Expression.interpolate(Expression.exponential(1.6f), Expression.zoom(), Expression.stop(8, 3f), Expression.stop(12, 5f), Expression.stop(15, 8f), Expression.stop(17, 13f), Expression.stop(19, 22f))),
+                PropertyFactory.lineWidth(Expression.interpolate(Expression.exponential(1.6f), Expression.zoom(), Expression.stop(8, 5f), Expression.stop(12, 8f), Expression.stop(15, 13f), Expression.stop(17, 22f), Expression.stop(19, 38f))),
                 PropertyFactory.lineCap(Property.LINE_CAP_ROUND),
                 PropertyFactory.lineJoin(Property.LINE_JOIN_ROUND)
             )
@@ -1853,7 +1908,8 @@ class MainActivity : Activity() {
     private val frameCb = object : android.view.Choreographer.FrameCallback {
         override fun doFrame(frameTimeNanos: Long) {
             if (!smRunning) return
-            smStep(frameTimeNanos)
+            // Écran 120 Hz : on ne recalcule la caméra qu'environ 30 fois par seconde (moins de chauffe, même fluidité)
+            if (lastFrameNs == 0L || frameTimeNanos - lastFrameNs >= 28_000_000L) smStep(frameTimeNanos)
             android.view.Choreographer.getInstance().postFrameCallback(this)
         }
     }
@@ -1861,11 +1917,13 @@ class MainActivity : Activity() {
     private fun smStart() {
         if (smRunning) return
         smRunning = true
+        try { mapView.setMaximumFps(30) } catch (_: Exception) {}
         lastFrameNs = 0L
         android.view.Choreographer.getInstance().postFrameCallback(frameCb)
     }
 
     private fun smStop() {
+        if (smRunning) try { mapView.setMaximumFps(60) } catch (_: Exception) {}
         smRunning = false
         smInit = false
     }
@@ -1979,7 +2037,7 @@ class MainActivity : Activity() {
             if (locMgr.isProviderEnabled(LocationManager.GPS_PROVIDER))
                 locMgr.requestLocationUpdates(LocationManager.GPS_PROVIDER, 1000L, 0f, locListener, Looper.getMainLooper())
             if (locMgr.isProviderEnabled(LocationManager.NETWORK_PROVIDER))
-                locMgr.requestLocationUpdates(LocationManager.NETWORK_PROVIDER, 3000L, 0f, locListener, Looper.getMainLooper())
+                locMgr.requestLocationUpdates(LocationManager.NETWORK_PROVIDER, 10000L, 0f, locListener, Looper.getMainLooper())
             val last = locMgr.getLastKnownLocation(LocationManager.GPS_PROVIDER)
                 ?: locMgr.getLastKnownLocation(LocationManager.NETWORK_PROVIDER)
             if (last != null && me == null) onLocation(last)
@@ -1999,6 +2057,7 @@ class MainActivity : Activity() {
         if (follow) moveCamera(loc)
         val kmh = if (loc.hasSpeed()) (loc.speed * 3.6f).roundToInt() else 0
         updateLimit(loc)
+        if (navigating) { if (kmh > 70) buildings3d(false) else if (kmh < 55) buildings3d(true) } else buildings3d(true)
         val lim = limitNow
         val over = !demo && lim != null && kmh > lim + 3
         speedView.set(kmh, over)
@@ -2038,7 +2097,7 @@ class MainActivity : Activity() {
         val p = Pt(loc.latitude, loc.longitude)
         val lp = lastLimitPt
         if (lp != null) {
-            if (now - lastLimitTime < 4000) return
+            if (now - lastLimitTime < 6000) return
             if (loc.speed < 1f) return
             if (Geo.dist(lp, p) < 30.0 && now - lastLimitTime < 20000) return
         }
@@ -2686,6 +2745,7 @@ class MainActivity : Activity() {
         NavBridge.nextDist = 0.0
         NavBridge.remainDist = r.dist
         NavBridge.remainSec = r.dur
+        updatePipParams()
         tripStart = System.currentTimeMillis()
         tripDist = 0.0
         tripMax = 0
@@ -2714,6 +2774,7 @@ class MainActivity : Activity() {
         if (!navigating) return
         stopDemo()
         navigating = false
+        updatePipParams()
         basePois(true)
         zoomBoost = 0.0
         roadView.visibility = View.GONE
@@ -2874,7 +2935,7 @@ class MainActivity : Activity() {
         val exitNum = Regex("Sortie\\s+(\\S+)").find(next.sign)?.groupValues?.get(1)
         val exitTo = towardTxt.removePrefix("vers ").trim().ifBlank { next.name }
         val isExit = next.kind in 17..21 || (next.kind in 22..24 && next.sign.isNotBlank())
-        if (isExit && (exitNum != null || exitTo.isNotBlank()) && dNext < 6000) {
+        if (!inPip && isExit && (exitNum != null || exitTo.isNotBlank()) && dNext < 6000) {
             exitTop.text = "SORTIE"
             val xr = allRefs.firstOrNull()
             if (xr != null) {
