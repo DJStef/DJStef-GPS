@@ -77,7 +77,7 @@ import kotlin.math.roundToInt
 class MainActivity : Activity() {
 
     companion object {
-        const val VERSION = "1.7"
+        const val VERSION = "1.8"
         private val EURO_RE = Regex("^E\\s?\\d{1,3}$")
         private val SIGN_REF_RE = Regex("^([A-Z]{1,2}\\s?\\d{1,4}[A-Za-z]?)\\s*[·:-]\\s*(.*)$")
         private val VERS_RE = Regex("\\s+vers\\s+(.+)$")
@@ -356,9 +356,10 @@ class MainActivity : Activity() {
         startPolling()
     }
 
-    override fun onStart() { super.onStart(); mapView.onStart() }
+    override fun onStart() { super.onStart(); activityStopped = false; mapView.onStart() }
     override fun onResume() { super.onResume(); mapView.onResume(); startLocation() }
-    override fun onPause() { super.onPause(); if (!pipEntering && !isInPictureInPictureMode) mapView.onPause() }
+    private var activityStopped = false
+    override fun onPause() { super.onPause(); if (!navigating && !pipEntering && !isInPictureInPictureMode) mapView.onPause() }
 
     // --- Mode fenêtré (image dans l'image) : pendant un guidage, quitter l'appli la réduit en petite fenêtre ---
     private var inPip = false
@@ -394,7 +395,12 @@ class MainActivity : Activity() {
             bottomBox.visibility = View.GONE
             carName.visibility = View.GONE
             exitSign.visibility = View.GONE
+            navToward.visibility = View.GONE; navStreet.visibility = View.GONE; navRoad.visibility = View.GONE
+            applyUiScale()
         } else {
+            navStreet.visibility = View.VISIBLE
+            navToward.visibility = if (navToward.text.isNullOrBlank()) View.GONE else View.VISIBLE
+            navRoad.visibility = if (navRoad.text.isNullOrBlank()) View.GONE else View.VISIBLE
             sideBox?.visibility = View.VISIBLE
             bottomBox.visibility = View.VISIBLE
             refreshPanel()
@@ -406,7 +412,15 @@ class MainActivity : Activity() {
         mapView.postDelayed({ if (inPip == isInPictureInPictureMode) { positionCar(); map?.let { m -> m.triggerRepaint() } } }, 300)
         positionCar()
     }
-    override fun onStop() { super.onStop(); if (!inPip && !pipEntering) mapView.onStop() }
+    override fun onStop() {
+        super.onStop()
+        activityStopped = true
+        if (!navigating && !inPip && !pipEntering) mapView.onStop()
+        else if (navigating) rootLayout.postDelayed({
+            // en guidage : la carte reste active le temps que la fenêtre PiP s'installe ; sinon on la coupe
+            if (activityStopped && !inPip && !isInPictureInPictureMode) { mapView.onPause(); mapView.onStop() }
+        }, 1000)
+    }
     override fun onLowMemory() { super.onLowMemory(); mapView.onLowMemory() }
     override fun onSaveInstanceState(outState: Bundle) { super.onSaveInstanceState(outState); mapView.onSaveInstanceState(outState) }
 
@@ -607,6 +621,7 @@ class MainActivity : Activity() {
         navBanner.background = colorBg("#1E7B34", 22)
         navBanner.setPadding(dp(12), dp(7), dp(14), dp(7))
         navBanner.elevation = dp(6).toFloat()
+        navBanner.isClickable = true
         navBanner.visibility = View.GONE
         navArrow = ManeuverView(this)
         navBanner.addView(navArrow, LinearLayout.LayoutParams(dp(66), dp(66)))
@@ -637,6 +652,7 @@ class MainActivity : Activity() {
         topBox.addView(navBanner, LinearLayout.LayoutParams(-1, -2))
         // Panneau bleu de sortie d'autoroute (style panneau routier français)
         exitSign = LinearLayout(this)
+        exitSign.isClickable = true
         exitSign.orientation = LinearLayout.HORIZONTAL
         exitSign.gravity = Gravity.CENTER_VERTICAL
         exitSign.background = GradientDrawable().also {
@@ -680,6 +696,7 @@ class MainActivity : Activity() {
         topBox.addView(exitSign, LinearLayout.LayoutParams(-1, -2).also { it.topMargin = dp(6) })
 
         radarBox = LinearLayout(this)
+        radarBox.isClickable = true
         radarBox.orientation = LinearLayout.HORIZONTAL
         radarBox.gravity = Gravity.CENTER_VERTICAL
         radarBox.background = colorBg("#C62828", 18)
@@ -766,6 +783,7 @@ class MainActivity : Activity() {
         bottomBox.addView(infoRow, LinearLayout.LayoutParams(-1, -2).also { it.bottomMargin = dp(8) })
 
         panel = LinearLayout(this)
+        panel.isClickable = true
         panel.orientation = LinearLayout.VERTICAL
         panel.background = colorBg("#F2101828", 20)
         panel.setPadding(dp(12), dp(10), dp(12), dp(10))
@@ -840,6 +858,7 @@ class MainActivity : Activity() {
         creditView.setLinkTextColor(Color.parseColor("#90CAF9"))
         creditView.visibility = View.GONE // crédits déplacés dans Réglages > À propos
         navBand = LinearLayout(this)
+        navBand.isClickable = true
         navBand.orientation = LinearLayout.VERTICAL
         navBand.gravity = Gravity.CENTER_HORIZONTAL
         navBand.setBackgroundColor(Color.parseColor("#EE101828"))
@@ -1047,7 +1066,7 @@ class MainActivity : Activity() {
         val h = c.screenHeightDp
         if (h <= 0) return 1f
         val base = if (isLandscape()) 400f else 800f
-        return (h / base).coerceIn(0.6f, 1f)
+        return (h / base).coerceIn(if (inPip) 0.3f else 0.6f, 1f)
     }
 
     private fun scaleView(v: View, f: Float, skip: View?, deep: Boolean) {
@@ -2183,7 +2202,7 @@ class MainActivity : Activity() {
         val ref = refs.firstOrNull()?.let { it.replace(Regex("^([A-Z]+)(\\d)"), "$1 $2") } ?: ""
         if (name.isNotBlank() && ref.isNotBlank() && norm(name) == norm(ref)) name = ""
         val txt = listOf(ref, name).filter { it.isNotBlank() }.joinToString(" · ")
-        val show = txt.isNotBlank() && prefs.bool("showRoadName", true) && menuView == null && !searchBox.hasFocus() && resultsBox.visibility != View.VISIBLE
+        val show = txt.isNotBlank() && prefs.bool("showRoadName", true) && menuView == null && !inPip && !searchBox.hasFocus() && resultsBox.visibility != View.VISIBLE
         if (txt != carName.text.toString()) {
             carName.text = txt
             val (bg, fg) = when (ref.firstOrNull()) {
@@ -2966,10 +2985,11 @@ class MainActivity : Activity() {
         if (allRefs.any { !EURO_RE.matches(it) }) allRefs.removeAll { EURO_RE.matches(it) }
         val towardTxt = if (sm != null) sm.groupValues[2] else toward
         navToward.text = towardTxt
-        navToward.visibility = if (towardTxt.isBlank()) View.GONE else View.VISIBLE
+        navToward.visibility = if (towardTxt.isBlank() || inPip) View.GONE else View.VISIBLE
         navRoad2.visibility = View.GONE
         navStreet.text = instr
         styleRoad(navRoad, allRefs, 18f)
+        if (inPip) { navRoad.visibility = View.GONE; navStreet.visibility = View.GONE }
         val exitNum = Regex("Sortie\\s+(\\S+)").find(next.sign)?.groupValues?.get(1)
         val exitTo = towardTxt.removePrefix("vers ").trim().ifBlank { next.name }
         val isExit = next.kind in 17..21 || (next.kind in 22..24 && next.sign.isNotBlank())
