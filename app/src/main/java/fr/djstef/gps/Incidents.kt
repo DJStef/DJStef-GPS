@@ -16,7 +16,9 @@ data class Incident(
     val to: String,
     val roads: String,
     val lengthM: Int,
-    val delayS: Int
+    val delayS: Int,
+    /** Tracé complet de l'incident (pour colorer la portion de route concernée). */
+    val line: List<Pt> = emptyList()
 ) {
     val label: String
         get() = when (cat) {
@@ -47,7 +49,7 @@ data class Incident(
     val relevant: Boolean
         get() = when (cat) {
             1, 7, 8 -> true
-            6 -> magnitude >= 2
+            6 -> magnitude >= 1 || delayS >= 30
             14 -> magnitude >= 2 || delayS >= 60
             else -> magnitude >= 2 && delayS >= 120
         }
@@ -72,7 +74,11 @@ object Incidents {
                     val o = arr.getJSONObject(i)
                     val g = o.getJSONObject("geometry")
                     val c = g.getJSONArray("coordinates")
-                    val first = if (g.getString("type") == "Point") c else c.getJSONArray(0)
+                    val isPoint = g.getString("type") == "Point"
+                    val first = if (isPoint) c else c.getJSONArray(0)
+                    val line = ArrayList<Pt>()
+                    if (isPoint) line.add(Pt(c.getDouble(1), c.getDouble(0)))
+                    else for (k in 0 until c.length()) { val q = c.getJSONArray(k); line.add(Pt(q.getDouble(1), q.getDouble(0))) }
                     val p = o.getJSONObject("properties")
                     val ev = p.optJSONArray("events")
                     val desc = ev?.optJSONObject(0)?.optString("description", "") ?: ""
@@ -88,7 +94,8 @@ object Incidents {
                             p.optString("to", ""),
                             roads,
                             p.optInt("length", 0),
-                            p.optInt("delay", 0)
+                            p.optInt("delay", 0),
+                            line
                         )
                     )
                 } catch (_: Exception) {

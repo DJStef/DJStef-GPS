@@ -54,7 +54,6 @@ import org.maplibre.android.maps.MapView
 import org.maplibre.android.maps.Style
 import org.maplibre.android.style.expressions.Expression
 import org.maplibre.android.style.layers.CircleLayer
-import org.maplibre.android.style.layers.FillExtrusionLayer
 import org.maplibre.android.style.layers.FillLayer
 import org.maplibre.android.style.layers.LineLayer
 import org.maplibre.android.style.layers.Property
@@ -78,7 +77,7 @@ import kotlin.math.roundToInt
 class MainActivity : Activity() {
 
     companion object {
-        const val VERSION = "1.6"
+        const val VERSION = "1.7"
         private val EURO_RE = Regex("^E\\s?\\d{1,3}$")
         private val SIGN_REF_RE = Regex("^([A-Z]{1,2}\\s?\\d{1,4}[A-Za-z]?)\\s*[·:-]\\s*(.*)$")
         private val VERS_RE = Regex("\\s+vers\\s+(.+)$")
@@ -388,6 +387,9 @@ class MainActivity : Activity() {
         inPip = isInPictureInPictureMode
         pipEntering = false
         if (isInPictureInPictureMode) {
+            // la carte a pu être mise en pause pendant la transition : on la relance
+            mapView.onStart()
+            mapView.onResume()
             sideBox?.visibility = View.GONE
             bottomBox.visibility = View.GONE
             carName.visibility = View.GONE
@@ -399,10 +401,12 @@ class MainActivity : Activity() {
             updateRoadName()
             applyUiScale()
             goFullscreen()
+            mapView.onResume()
         }
+        mapView.postDelayed({ if (inPip == isInPictureInPictureMode) { positionCar(); map?.let { m -> m.triggerRepaint() } } }, 300)
         positionCar()
     }
-    override fun onStop() { super.onStop(); mapView.onStop() }
+    override fun onStop() { super.onStop(); if (!inPip && !pipEntering) mapView.onStop() }
     override fun onLowMemory() { super.onLowMemory(); mapView.onLowMemory() }
     override fun onSaveInstanceState(outState: Bundle) { super.onSaveInstanceState(outState); mapView.onSaveInstanceState(outState) }
 
@@ -1307,20 +1311,8 @@ class MainActivity : Activity() {
         }
     }
 
-    private var b3dOn = true
-    /** Les immeubles en 3D coûtent cher à dessiner : on les coupe quand on roule vite (route dégagée). */
-    private fun buildings3d(show: Boolean) {
-        if (show == b3dOn) return
-        val st = style ?: return
-        b3dOn = show
-        try {
-            for (l in st.layers) if (l is FillExtrusionLayer) l.setProperties(PropertyFactory.visibility(if (show) Property.VISIBLE else Property.NONE))
-        } catch (_: Exception) {}
-    }
-
     private fun onStyleReady(m: MapLibreMap, st: Style) {
         style = st
-        b3dOn = true
         // Pas de fondu des symboles (la voiture clignotait à chaque mise à jour de position)
         st.transition = org.maplibre.android.style.layers.TransitionOptions(0, 0, false)
         widenRoads(st)
@@ -1488,6 +1480,51 @@ class MainActivity : Activity() {
         return FeatureCollection.fromFeatures(out)
     }
 
+    private var trafSecs: List<TrafSec> = emptyList()
+
+    /** Tronçons ralentis : ceux de l'itinéraire TomTom + les bouchons / routes fermées signalés par TomTom sur notre tracé. */
+    private fun repaintTraffic() {
+        val r = route ?: return
+        val extra = incidents.filter { it.line.size >= 2 && (it.cat == 6 || it.cat == 8 || (it.cat == 7 && it.magnitude >= 2)) }.map {
+            val red = it.cat == 8 || it.magnitude >= 3
+            TrafSec(it.line.first(), it.line.last(), if (red) "#D32F2F" else "#FF9F1C")
+        }
+        paintTraffic(r, trafSecs + extra)
+    }
+
+    /** Aperçu : cherche les incidents sur le début du trajet (4 zones au maximum, pour ménager le quota gratuit). */
+    private fun fetchRouteIncidents(r: Route) {
+        val key = prefs.str("tomtomKey", "")
+        if (key.isBlank() || !prefs.bool("incidents", true) || r.pts.size < 2) return
+        val boxes = ArrayList<DoubleArray>()
+        var i = 0
+        while (i < r.pts.size && boxes.size < 4) {
+            var minLat = r.pts[i].lat; var maxLat = minLat; var minLon = r.pts[i].lon; var maxLon = minLon
+            var j = i
+            while (j < r.pts.size) {
+                val p = r.pts[j]
+                val a = minOf(minLat, p.lat); val b = maxOf(maxLat, p.lat); val c = minOf(minLon, p.lon); val d = maxOf(maxLon, p.lon)
+                val area = (b - a + 0.06) * 111.0 * (d - c + 0.08) * 111.0 * Math.cos(Math.toRadians(p.lat))
+                if (area > 8500 && j > i) break
+                minLat = a; maxLat = b; minLon = c; maxLon = d
+                j++
+            }
+            boxes.add(doubleArrayOf(minLat - 0.03, minLon - 0.04, maxLat + 0.03, maxLon + 0.04))
+            i = j
+        }
+        scope.launch {
+            val all = LinkedHashMap<String, Incident>()
+            for (bx in boxes) {
+                try { Incidents.fetch(key, bx[0], bx[1], bx[2], bx[3]).forEach { all[it.id] = it } } catch (_: Exception) {}
+            }
+            if (route === r && !navigating) {
+                incidents = all.values.toList()
+                refreshIncidentLayer()
+                repaintTraffic()
+            }
+        }
+    }
+
     private fun paintTraffic(r: Route, secs: List<TrafSec>) {
         scope.launch {
             val cols = run {
@@ -1500,6 +1537,7 @@ class MainActivity : Activity() {
                     if (s0.third > 120.0 || s1.third > 120.0) continue
                     val lo = minOf(i0, i1)
                     val hi = maxOf(i0, i1)
+                    if (hi - lo > r.pts.size * 0.6) continue
                     for (k in lo..hi.coerceAtMost(a.size - 1)) {
                         // le plus grave l'emporte (rouge > orange)
                         if (a[k] == null || sc.color == "#D32F2F") a[k] = sc.color
@@ -1827,6 +1865,7 @@ class MainActivity : Activity() {
             try {
                 incidents = Incidents.fetch(key, minLat, minLon, maxLat, maxLon)
                 refreshIncidentLayer()
+                repaintTraffic()
             } catch (_: Exception) {
             } finally {
                 incBusy = false
@@ -1908,8 +1947,7 @@ class MainActivity : Activity() {
     private val frameCb = object : android.view.Choreographer.FrameCallback {
         override fun doFrame(frameTimeNanos: Long) {
             if (!smRunning) return
-            // Écran 120 Hz : on ne recalcule la caméra qu'environ 30 fois par seconde (moins de chauffe, même fluidité)
-            if (lastFrameNs == 0L || frameTimeNanos - lastFrameNs >= 28_000_000L) smStep(frameTimeNanos)
+            if (lastFrameNs == 0L || frameTimeNanos - lastFrameNs >= 15_000_000L) smStep(frameTimeNanos)
             android.view.Choreographer.getInstance().postFrameCallback(this)
         }
     }
@@ -1917,13 +1955,12 @@ class MainActivity : Activity() {
     private fun smStart() {
         if (smRunning) return
         smRunning = true
-        try { mapView.setMaximumFps(30) } catch (_: Exception) {}
+        try { mapView.setMaximumFps(60) } catch (_: Exception) {}
         lastFrameNs = 0L
         android.view.Choreographer.getInstance().postFrameCallback(frameCb)
     }
 
     private fun smStop() {
-        if (smRunning) try { mapView.setMaximumFps(60) } catch (_: Exception) {}
         smRunning = false
         smInit = false
     }
@@ -2057,7 +2094,6 @@ class MainActivity : Activity() {
         if (follow) moveCamera(loc)
         val kmh = if (loc.hasSpeed()) (loc.speed * 3.6f).roundToInt() else 0
         updateLimit(loc)
-        if (navigating) { if (kmh > 70) buildings3d(false) else if (kmh < 55) buildings3d(true) } else buildings3d(true)
         val lim = limitNow
         val over = !demo && lim != null && kmh > lim + 3
         speedView.set(kmh, over)
@@ -2549,6 +2585,7 @@ class MainActivity : Activity() {
             if (radars.isNotEmpty()) append(" · ${radars.size} radar(s) sur le trajet")
             if (info.isNotEmpty()) append(" ($info)")
         }
+        if (!navigating && !keepNav) fetchRouteIncidents(r)
         etaView.text = "Arrivée ${eta(r.dur)} · " + summary(r.dur, r.dist)
         subView.text = extra.trimStart(' ', '·')
         subView.visibility = if (subView.text.isBlank()) View.GONE else View.VISIBLE
@@ -2671,7 +2708,8 @@ class MainActivity : Activity() {
                 trafficEta = Pair(sec, System.currentTimeMillis())
                 trafficDelay = delay
                 if (navigating && trafBase > 60.0) trafficFactor = (sec / trafBase).coerceIn(0.5, 3.0)
-                route?.let { paintTraffic(it, res.third) }
+                trafSecs = res.third
+                repaintTraffic()
                 if (preview && !navigating) {
                     etaView.text = "Arrivée ${eta(sec)}"
                     val r = route
